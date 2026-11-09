@@ -1,0 +1,26 @@
+# Local environment files (keep the safe example template)
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+
+# Keep the configured browser key out of source control; copy from the safe template when deploying.
+/supabase-config.js
+
+# Downloaded project bundle duplicates the source tree and may include local config.
+/COKITOMI-SHOP-COMPLETE.zip
+
+# Node/runtime artifacts
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+
+# Local credentials/cache artifacts
+.token-cache/
+.secrets/
+.DS_Store
+Thumbs.db

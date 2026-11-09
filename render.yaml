@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: cokitomi-discovery-api
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: CJ_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: ADMIN_USER_IDS
+        sync: false
+      - key: COKITOMI_ALLOWED_ORIGINS
+        sync: false
+      - key: CJ_API_BASE_URL
+        value: https://developers.cjdropshipping.com/api2.0/v1
+      - key: CJ_MAX_CANDIDATES
+        value: "20"
+      - key: CJ_REQUEST_INTERVAL_MS
+        value: "1100"
+      - key: DISCOVERY_RETAIL_MULTIPLIER
+        value: "2.5"
+      - key: ESTIMATED_PAYMENT_FEE_RATE
+        value: "0.03"
