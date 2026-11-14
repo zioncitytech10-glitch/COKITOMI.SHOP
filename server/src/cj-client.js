@@ -23,17 +23,26 @@ export class CjClient {
     const delay = this.minIntervalMs - (Date.now() - this.lastRequestAt);
     if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     this.lastRequestAt = Date.now();
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method,
-      headers: { "Content-Type": "application/json", ...(accessToken ? { "CJ-Access-Token": accessToken } : {}) },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-      signal: AbortSignal.timeout(25000),
-    });
+    let response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method,
+        headers: { "Content-Type": "application/json", ...(accessToken ? { "CJ-Access-Token": accessToken } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        signal: AbortSignal.timeout(25000),
+      });
+    } catch {
+      const error = new Error("CJ network request failed");
+      error.networkFailure = true;
+      throw error;
+    }
     let data;
     try { data = await response.json(); } catch { throw new Error("CJ returned a non-JSON response"); }
     if (!response.ok || data?.result === false) {
-      const err = new Error(`CJ request failed (${Number(data?.code) || response.status})`);
-      err.cjCode = Number(data?.code);
+      const parsedCode = Number(data?.code);
+      const err = new Error("CJ provider request failed");
+      err.cjCode = Number.isInteger(parsedCode) ? parsedCode : null;
+      err.httpStatus = response.status;
       throw err;
     }
     return data;

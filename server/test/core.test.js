@@ -84,12 +84,28 @@ test("connectivity diagnostic reports successful read-only checks without data",
 });
 
 test("connectivity diagnostic sanitizes failed provider connections", async () => {
-  const result = await runConnectivityDiagnostic({
-    authorization: "Bearer test_only_diagnostic_token_0123456789",
-    diagnosticToken: "test_only_diagnostic_token_0123456789",
-    supabase: { checkConnectivity: async () => { throw new Error("sensitive URL and secret details"); } },
-    cj: { call: async () => { throw new Error("private CJ token detail"); } },
-  });
+  const logged = [];
+  const originalWarn = console.warn;
+  console.warn = (line) => logged.push(line);
+  let result;
+  try {
+    result = await runConnectivityDiagnostic({
+      authorization: "Bearer test_only_diagnostic_token_0123456789",
+      diagnosticToken: "test_only_diagnostic_token_0123456789",
+      supabase: new SupabaseService({
+        url: "https://example.supabase.co",
+        publishableKey: "test-publishable-key",
+        serviceRoleKey: "test-service-key",
+        fetchImpl: async () => Response.json({ code: "42501", message: "sensitive URL and service key" }, { status: 403 }),
+      }),
+      cj: new CjClient({
+        apiKey: "test-cj-api-key",
+        baseUrl: "https://cj.example/api",
+        minIntervalMs: 0,
+        fetchImpl: async () => Response.json({ code: 1600001, result: false, message: "private CJ token detail" }),
+      }),
+    });
+  } finally { console.warn = originalWarn; }
   const responseText = JSON.stringify(result.body);
   assert.equal(result.httpStatus, 503);
   assert.equal(result.body.status, "degraded");
@@ -97,6 +113,17 @@ test("connectivity diagnostic sanitizes failed provider connections", async () =
   assert.equal(result.body.checks.cj.status, "error");
   assert.equal(responseText.includes("sensitive URL"), false);
   assert.equal(responseText.includes("private CJ token"), false);
+  const logText = logged.join("\n");
+  assert.match(logText, /42501/);
+  assert.match(logText, /1600001/);
+  assert.match(logText, /database permission denied/);
+  assert.match(logText, /CJ authentication rejected/);
+  assert.equal(logText.includes("service key"), false);
+  assert.equal(logText.includes("private CJ token"), false);
+  assert.equal(logText.includes("sensitive URL"), false);
+  assert.equal(logText.includes("test-service-key"), false);
+  assert.equal(logText.includes("test-publishable-key"), false);
+  assert.equal(logText.includes("test-cj-api-key"), false);
 });
 
 test("connectivity diagnostic rejects unauthorized requests before calling providers", async () => {
