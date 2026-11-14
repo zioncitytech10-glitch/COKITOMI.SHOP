@@ -15,9 +15,17 @@ export function loadConfig(env = process.env) {
   if (cjBaseUrl.protocol !== "https:") throw new Error("CJ_API_BASE_URL must use HTTPS");
   const adminUserIds = env.ADMIN_USER_IDS.split(",").map((id) => id.trim()).filter(Boolean);
   if (!adminUserIds.length) throw new Error("ADMIN_USER_IDS must contain at least one user UUID");
-  const allowedOrigins = (env.COKITOMI_ALLOWED_ORIGINS || "").split(",").map((x) => x.trim()).filter(Boolean);
-  if (allowedOrigins.some((origin) => origin === "*" || !/^https?:\/\//.test(origin))) {
-    throw new Error("COKITOMI_ALLOWED_ORIGINS must contain exact http(s) origins, never *");
+  const rawOrigins = (env.COKITOMI_ALLOWED_ORIGINS || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const allowedOrigins = rawOrigins.map((origin) => {
+    let parsed;
+    try { parsed = new URL(origin); } catch { throw new Error("COKITOMI_ALLOWED_ORIGINS must contain exact http(s) origins, never *"); }
+    if (origin === "*" || !["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+      throw new Error("COKITOMI_ALLOWED_ORIGINS must contain exact http(s) origins without paths, never *");
+    }
+    return parsed.origin;
+  });
+  if (adminUserIds.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) {
+    throw new Error("ADMIN_USER_IDS must contain comma-separated Supabase Auth user UUIDs");
   }
 
   return Object.freeze({

@@ -19,11 +19,14 @@ export class SupabaseService {
   }
 
   async #db(path, { method = "GET", body, query = "" } = {}) {
+    // Modern sb_* API keys are opaque keys, not JWTs. Send them only in
+    // apikey; legacy service_role keys are JWTs and continue to use both.
+    const isModernApiKey = this.serviceRoleKey.startsWith("sb_secret_") || this.serviceRoleKey.startsWith("sb_publishable_");
     const response = await this.fetchImpl(`${this.url}/rest/v1/${path}${query}`, {
       method,
       headers: {
         apikey: this.serviceRoleKey,
-        Authorization: `Bearer ${this.serviceRoleKey}`,
+        ...(!isModernApiKey ? { Authorization: `Bearer ${this.serviceRoleKey}` } : {}),
         "Content-Type": "application/json",
         Prefer: method === "POST" && path.startsWith("product_recommendations") ? "resolution=merge-duplicates,return=representation" : "return=representation",
       },

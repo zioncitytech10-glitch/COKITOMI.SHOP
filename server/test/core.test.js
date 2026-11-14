@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { scoreCandidate } from "../src/scoring.js";
 import { CjClient } from "../src/cj-client.js";
 import { SupabaseService } from "../src/supabase.js";
+import { loadConfig } from "../src/config.js";
 
 test("scoring includes landed cost and yields bounded commercial score", () => {
   const scored = scoreCandidate({ supplierPrice: 5, shippingCost: 2, inventory: 150, usInventory: 20, rating: 4.8, reviewCount: 30, deliveryDays: 6, trending: true });
@@ -34,4 +35,31 @@ test("Supabase admin check validates bearer via Auth API and allowlists UUID", a
   } });
   assert.deepEqual(await supabase.verifyAdmin("Bearer signed-test-jwt", new Set([id])), { id });
   assert.equal(await supabase.verifyAdmin("Bearer signed-test-jwt", new Set()), null);
+});
+
+test("modern Supabase secret key is sent as apikey, never as a Bearer JWT", async () => {
+  let seen;
+  const secretKey = "sb_secret_test_only_value";
+  const supabase = new SupabaseService({
+    url: "https://example.supabase.co",
+    publishableKey: "sb_publishable_test_only_value",
+    serviceRoleKey: secretKey,
+    fetchImpl: async (_url, options) => { seen = options.headers; return Response.json([]); },
+  });
+  await supabase.listRecommendations();
+  assert.equal(seen.apikey, secretKey);
+  assert.equal("Authorization" in seen, false);
+});
+
+test("config accepts Supabase Auth UUIDs and normalizes GitHub Pages origin", () => {
+  const config = loadConfig({
+    CJ_API_KEY: "test-cj-key",
+    SUPABASE_URL: "https://example.supabase.co",
+    SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test_only_value",
+    SUPABASE_SERVICE_ROLE_KEY: "sb_secret_test_only_value",
+    ADMIN_USER_IDS: "00000000-0000-4000-8000-000000000001",
+    COKITOMI_ALLOWED_ORIGINS: "https://zioncitytech10-glitch.github.io/",
+  });
+  assert.equal(config.adminUserIds.has("00000000-0000-4000-8000-000000000001"), true);
+  assert.equal(config.allowedOrigins.has("https://zioncitytech10-glitch.github.io"), true);
 });
