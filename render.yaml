@@ -19,6 +19,8 @@ services:
         sync: false
       - key: COKITOMI_ALLOWED_ORIGINS
         sync: false
+      - key: DIAGNOSTIC_BEARER_TOKEN
+        sync: false
       - key: CJ_API_BASE_URL
         value: https://developers.cjdropshipping.com/api2.0/v1
       - key: CJ_MAX_CANDIDATES

@@ -47,6 +47,11 @@ export class SupabaseService {
     });
   }
 
+  async checkConnectivity() {
+    // Read at most one identifier and discard the response at the diagnostic layer.
+    return this.#db("products?select=id&limit=1");
+  }
+
   async listRecommendations(status = "pending", limit = 100) {
     const params = new URLSearchParams({ select: "*", status: `eq.${status}`, order: "commercial_score.desc", limit: String(limit) });
     return this.#db(`product_recommendations?${params}`);

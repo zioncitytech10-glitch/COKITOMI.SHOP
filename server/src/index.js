@@ -4,6 +4,7 @@ import { loadConfig } from "./config.js";
 import { CjClient } from "./cj-client.js";
 import { ProductDiscovery } from "./discovery.js";
 import { SupabaseService } from "./supabase.js";
+import { runConnectivityDiagnostic } from "./diagnostics.js";
 
 const config = loadConfig();
 const supabase = new SupabaseService({
@@ -48,6 +49,15 @@ const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://localhost");
     if (req.method === "GET" && url.pathname === "/healthz") return send(res, 200, { ok: true });
+    if (req.method === "GET" && url.pathname === "/api/admin/diagnostics/connectivity") {
+      const result = await runConnectivityDiagnostic({
+        authorization: req.headers.authorization,
+        diagnosticToken: config.diagnosticBearerToken,
+        supabase,
+        cj,
+      });
+      return send(res, result.httpStatus, result.body);
+    }
     if (url.pathname.startsWith("/api/admin/")) {
       const admin = await requireAdmin(req);
       if (!admin) return send(res, 401, { error: "Admin authentication required" });

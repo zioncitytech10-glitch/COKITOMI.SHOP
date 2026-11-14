@@ -27,6 +27,10 @@ export function loadConfig(env = process.env) {
   if (adminUserIds.some((id) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))) {
     throw new Error("ADMIN_USER_IDS must contain comma-separated Supabase Auth user UUIDs");
   }
+  const diagnosticBearerToken = env.DIAGNOSTIC_BEARER_TOKEN && !PLACEHOLDER.test(env.DIAGNOSTIC_BEARER_TOKEN)
+    ? env.DIAGNOSTIC_BEARER_TOKEN
+    : "";
+  if (diagnosticBearerToken && diagnosticBearerToken.length < 32) throw new Error("DIAGNOSTIC_BEARER_TOKEN must be at least 32 characters");
 
   return Object.freeze({
     cjApiKey: env.CJ_API_KEY,
@@ -35,6 +39,7 @@ export function loadConfig(env = process.env) {
     supabasePublishableKey: env.SUPABASE_PUBLISHABLE_KEY,
     supabaseServiceRoleKey: env.SUPABASE_SERVICE_ROLE_KEY,
     adminUserIds: new Set(adminUserIds),
+    diagnosticBearerToken,
     allowedOrigins: new Set(allowedOrigins),
     port: Number(env.PORT || 10000),
     maxCandidates: Math.min(50, Math.max(1, Number(env.CJ_MAX_CANDIDATES || 20))),

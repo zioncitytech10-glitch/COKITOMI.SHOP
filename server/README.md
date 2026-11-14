@@ -6,11 +6,14 @@ Private Node.js API for CJdropshipping teddy-bear research and an admin-only rec
 
 Copy `server/.env.example` to a local `server/.env` and fill values only in your local environment. Never commit `.env`. Run `npm start` from this directory. The service uses Node built-ins and requires Node 20+.
 
-Required values: `CJ_API_KEY`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ADMIN_USER_IDS`, and `COKITOMI_ALLOWED_ORIGINS`. `SUPABASE_SERVICE_ROLE_KEY` accepts either a legacy service-role JWT or a modern `sb_secret_` key; both belong only in server environments. Modern keys are sent in the `apikey` header, while legacy JWT keys also use the bearer header. Configure secrets through Render's environment settings, not this repository.
+Required values: `CJ_API_KEY`, `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ADMIN_USER_IDS`, `COKITOMI_ALLOWED_ORIGINS`, and `DIAGNOSTIC_BEARER_TOKEN`. `SUPABASE_SERVICE_ROLE_KEY` accepts either a legacy service-role JWT or a modern `sb_secret_` key; both belong only in server environments. Modern keys are sent in the `apikey` header, while legacy JWT keys also use the bearer header. Configure secrets through Render's environment settings, not this repository.
 
 ## Endpoints
 
 - `GET /healthz` — process health only; does not reveal integrations.
+- `GET /api/admin/diagnostics/connectivity` — protected by `Authorization: Bearer <DIAGNOSTIC_BEARER_TOKEN>`; returns only server/Supabase/CJ status and latency, never provider details or data. Supabase check reads at most one product ID and discards it; CJ check calls the read-only category endpoint.
+
+`DIAGNOSTIC_BEARER_TOKEN` is intentionally optional at process startup so an existing Render deployment can keep serving `/healthz` before the new secret is added. Until a non-placeholder token of at least 32 characters is configured, the diagnostic endpoint returns `503 Diagnostic unavailable` without contacting either provider.
 - `POST /api/admin/cj/research` — Supabase-authenticated admin triggers bounded CJ searches; optional JSON `{ "keywords": ["teddy bear"] }`.
 - `GET /api/admin/recommendations?status=pending&limit=50` — private review queue.
 - `PATCH /api/admin/recommendations/{uuid}` — JSON `{ "status": "approved|rejected|pending", "notes": "optional" }`. This only updates review metadata; it never publishes a product.
