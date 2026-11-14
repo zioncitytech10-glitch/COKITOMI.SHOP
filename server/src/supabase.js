@@ -35,9 +35,11 @@ export class SupabaseService {
         ...(body ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(20000),
       });
-    } catch {
-      const error = new Error("Supabase network request failed");
-      error.networkFailure = true;
+    } catch (cause) {
+      const timeoutFailure = cause?.name === "TimeoutError" || cause?.name === "AbortError";
+      const error = new Error(timeoutFailure ? "Supabase request timed out" : "Supabase network request failed");
+      error.timeoutFailure = timeoutFailure;
+      error.networkFailure = !timeoutFailure;
       throw error;
     }
     if (!response.ok) {
@@ -52,7 +54,12 @@ export class SupabaseService {
       throw error;
     }
     if (response.status === 204) return [];
-    return response.json();
+    try { return await response.json(); } catch {
+      const error = new Error("Supabase returned an invalid response");
+      error.httpStatus = response.status;
+      error.protocolFailure = true;
+      throw error;
+    }
   }
 
   async saveRecommendations(rows) {

@@ -31,13 +31,20 @@ export class CjClient {
         ...(body ? { body: JSON.stringify(body) } : {}),
         signal: AbortSignal.timeout(25000),
       });
-    } catch {
-      const error = new Error("CJ network request failed");
-      error.networkFailure = true;
+    } catch (cause) {
+      const timeoutFailure = cause?.name === "TimeoutError" || cause?.name === "AbortError";
+      const error = new Error(timeoutFailure ? "CJ request timed out" : "CJ network request failed");
+      error.timeoutFailure = timeoutFailure;
+      error.networkFailure = !timeoutFailure;
       throw error;
     }
     let data;
-    try { data = await response.json(); } catch { throw new Error("CJ returned a non-JSON response"); }
+    try { data = await response.json(); } catch {
+      const error = new Error("CJ returned a non-JSON response");
+      error.httpStatus = response.status;
+      error.protocolFailure = true;
+      throw error;
+    }
     if (!response.ok || data?.result === false) {
       const parsedCode = Number(data?.code);
       const err = new Error("CJ provider request failed");
@@ -49,9 +56,16 @@ export class CjClient {
   }
 
   async #authenticate() {
-    const response = await this.#request(API_KEY_PATH, { method: "POST", body: { apiKey: this.apiKey } });
+    let response;
+    try { response = await this.#request(API_KEY_PATH, { method: "POST", body: { apiKey: this.apiKey } }); }
+    catch (error) { error.cjPhase = "authentication"; throw error; }
     const data = response.data || {};
-    if (!data.accessToken || !data.refreshToken) throw new Error("CJ authentication response was incomplete");
+    if (!data.accessToken || !data.refreshToken) {
+      const error = new Error("CJ authentication response was incomplete");
+      error.cjPhase = "authentication";
+      error.protocolFailure = true;
+      throw error;
+    }
     this.token = data.accessToken;
     this.refreshToken = data.refreshToken;
     this.expiresAt = expiryTime(data.accessTokenExpiryDate);
@@ -69,6 +83,7 @@ export class CjClient {
       this.expiresAt = expiryTime(data.accessTokenExpiryDate);
       return this.token;
     } catch (error) {
+      error.cjPhase = "authentication";
       if (error.cjCode === 1600003) return this.#authenticate();
       throw error;
     }
@@ -85,7 +100,9 @@ export class CjClient {
   async call(path, { method = "GET", query, body } = {}) {
     if (!path.startsWith("/") || path.includes("..")) throw new Error("Invalid CJ API path");
     const qs = query ? `?${new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null)).toString()}` : "";
-    let token = await this.getToken();
+    let token;
+    try { token = await this.getToken(); }
+    catch (error) { error.cjPhase ||= "authentication"; throw error; }
     try { return await this.#request(`${path}${qs}`, { method, body, accessToken: token }); }
     catch (error) {
       if (![1600001, 1600002].includes(error.cjCode)) throw error;

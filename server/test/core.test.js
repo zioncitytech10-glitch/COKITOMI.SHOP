@@ -28,6 +28,45 @@ test("CJ requests use one shared token acquisition and never put keys in URL", a
   assert.equal(cj.token, "access-only-test");
 });
 
+test("CJ refreshes once after an invalid access token and continues the normal request", async () => {
+  const calls = [];
+  const fakeFetch = async (url, options) => {
+    calls.push({ url, options });
+    if (url.endsWith("getAccessToken")) return Response.json({ result: true, data: { accessToken: "initial-access", refreshToken: "initial-refresh", accessTokenExpiryDate: "2099-01-01T00:00:00Z" } });
+    if (url.endsWith("refreshAccessToken")) return Response.json({ result: true, data: { accessToken: "refreshed-access", refreshToken: "refreshed-refresh", accessTokenExpiryDate: "2099-01-01T00:00:00Z" } });
+    if (options.headers["CJ-Access-Token"] === "initial-access") return Response.json({ code: 1600001, result: false, message: "private invalid-token response" });
+    assert.equal(options.headers["CJ-Access-Token"], "refreshed-access");
+    return Response.json({ result: true, data: [{ id: "product-1" }] });
+  };
+  const cj = new CjClient({ apiKey: "test-key", baseUrl: "https://cj.example/api", minIntervalMs: 0, fetchImpl: fakeFetch });
+  const result = await cj.call("/product/listV2", { query: { page: 1 } });
+  assert.deepEqual(result.data, [{ id: "product-1" }]);
+  assert.equal(calls.filter(({ url }) => url.endsWith("refreshAccessToken")).length, 1);
+  assert.equal(calls.filter(({ url }) => url.endsWith("getAccessToken")).length, 1);
+  assert.equal(calls.filter(({ url }) => url.endsWith("product/listV2?page=1")).length, 2);
+});
+
+test("CJ failed refresh and reauthentication terminate without retry loops", async () => {
+  const calls = [];
+  const fakeFetch = async (url, options) => {
+    calls.push(url);
+    if (url.endsWith("getAccessToken")) {
+      if (calls.filter((entry) => entry.endsWith("getAccessToken")).length === 1) {
+        return Response.json({ result: true, data: { accessToken: "initial-access", refreshToken: "initial-refresh", accessTokenExpiryDate: "2099-01-01T00:00:00Z" } });
+      }
+      return Response.json({ code: 1600005, result: false, message: "private reauthentication response" });
+    }
+    if (url.endsWith("refreshAccessToken")) return Response.json({ code: 1600003, result: false, message: "private refresh response" });
+    return Response.json({ code: 1600001, result: false, message: "private invalid-token response" });
+  };
+  const cj = new CjClient({ apiKey: "test-key", baseUrl: "https://cj.example/api", minIntervalMs: 0, fetchImpl: fakeFetch });
+  await assert.rejects(cj.call("/product/listV2"));
+  assert.equal(calls.filter((url) => url.endsWith("refreshAccessToken")).length, 1);
+  assert.equal(calls.filter((url) => url.endsWith("getAccessToken")).length, 2);
+  assert.equal(calls.filter((url) => url.endsWith("product/listV2")).length, 1);
+  assert.equal(calls.length, 4);
+});
+
 test("Supabase admin check validates bearer via Auth API and allowlists UUID", async () => {
   const id = "00000000-0000-4000-8000-000000000001";
   const supabase = new SupabaseService({ url: "https://example.supabase.co", publishableKey: "public-test", serviceRoleKey: "server-test", fetchImpl: async (_url, options) => {
@@ -111,19 +150,141 @@ test("connectivity diagnostic sanitizes failed provider connections", async () =
   assert.equal(result.body.status, "degraded");
   assert.equal(result.body.checks.supabase.status, "error");
   assert.equal(result.body.checks.cj.status, "error");
+  assert.equal(result.body.checks.supabase.classification, "permission_denied");
+  assert.equal(result.body.checks.supabase.phase, "database_query");
+  assert.equal(result.body.checks.supabase.providerCode, "42501");
+  assert.equal(result.body.checks.supabase.httpStatus, 403);
+  assert.equal(result.body.checks.cj.classification, "authentication_error");
+  assert.equal(result.body.checks.cj.phase, "token_generation");
+  assert.equal(result.body.checks.cj.providerCode, 1600001);
   assert.equal(responseText.includes("sensitive URL"), false);
   assert.equal(responseText.includes("private CJ token"), false);
   const logText = logged.join("\n");
   assert.match(logText, /42501/);
   assert.match(logText, /1600001/);
   assert.match(logText, /database permission denied/);
-  assert.match(logText, /CJ authentication rejected/);
+  assert.match(logText, /CJ authentication or account authorization rejected/);
   assert.equal(logText.includes("service key"), false);
   assert.equal(logText.includes("private CJ token"), false);
   assert.equal(logText.includes("sensitive URL"), false);
   assert.equal(logText.includes("test-service-key"), false);
   assert.equal(logText.includes("test-publishable-key"), false);
   assert.equal(logText.includes("test-cj-api-key"), false);
+});
+
+test("connectivity diagnostic classifies provider timeouts safely", async () => {
+  const logged = [];
+  const originalWarn = console.warn;
+  console.warn = (line) => logged.push(line);
+  try {
+    const timeout = () => Object.assign(new Error("sensitive socket details"), { name: "TimeoutError" });
+    const result = await runConnectivityDiagnostic({
+      authorization: "Bearer test_only_diagnostic_token_0123456789",
+      diagnosticToken: "test_only_diagnostic_token_0123456789",
+      supabase: new SupabaseService({ url: "https://example.supabase.co", publishableKey: "public", serviceRoleKey: "secret", fetchImpl: async () => { throw timeout(); } }),
+      cj: new CjClient({ apiKey: "cj-secret", baseUrl: "https://cj.example/api", minIntervalMs: 0, fetchImpl: async () => { throw timeout(); } }),
+    });
+    assert.equal(result.body.checks.supabase.classification, "timeout");
+    assert.equal(result.body.checks.cj.classification, "timeout");
+    const text = JSON.stringify({ body: result.body, logged });
+    assert.equal(text.includes("sensitive socket details"), false);
+    assert.equal(text.includes("cj-secret"), false);
+  } finally { console.warn = originalWarn; }
+});
+
+test("connectivity diagnostic classifies CJ authentication and timeout provider codes", async () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    for (const cjCode of [1600004, 1600005, 1600006]) {
+      const result = await runConnectivityDiagnostic({
+        authorization: "Bearer test_only_diagnostic_token_0123456789",
+        diagnosticToken: "test_only_diagnostic_token_0123456789",
+        supabase: { checkConnectivity: async () => [] },
+        cj: { call: async () => { throw Object.assign(new Error("private provider response"), { cjCode, httpStatus: 200 }); } },
+      });
+      assert.equal(result.body.checks.cj.classification, "authentication_error");
+      assert.equal(result.body.checks.cj.providerCode, cjCode);
+    }
+    const timedOut = await runConnectivityDiagnostic({
+      authorization: "Bearer test_only_diagnostic_token_0123456789",
+      diagnosticToken: "test_only_diagnostic_token_0123456789",
+      supabase: { checkConnectivity: async () => [] },
+      cj: { call: async () => { throw Object.assign(new Error("private timeout response"), { cjCode: 1600301, httpStatus: 200 }); } },
+    });
+    assert.equal(timedOut.body.checks.cj.classification, "timeout");
+  } finally { console.warn = originalWarn; }
+});
+
+test("connectivity diagnostic classifies HTTP gateway timeouts for both providers", async () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    for (const httpStatus of [408, 504]) {
+      const result = await runConnectivityDiagnostic({
+        authorization: "Bearer test_only_diagnostic_token_0123456789",
+        diagnosticToken: "test_only_diagnostic_token_0123456789",
+        supabase: { checkConnectivity: async () => { throw Object.assign(new Error("private Supabase response"), { httpStatus }); } },
+        cj: { call: async () => { throw Object.assign(new Error("private CJ response"), { httpStatus }); } },
+      });
+      assert.equal(result.body.checks.supabase.classification, "timeout");
+      assert.equal(result.body.checks.cj.classification, "timeout");
+      assert.equal(result.body.checks.supabase.httpStatus, httpStatus);
+      assert.equal(result.body.checks.cj.httpStatus, httpStatus);
+    }
+  } finally { console.warn = originalWarn; }
+});
+
+test("Supabase timeout statuses take precedence over error codes while permission and auth errors remain distinct", async () => {
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const cases = [
+      { httpStatus: 408, code: "42501", classification: "timeout", message: "database request timed out" },
+      { httpStatus: 504, code: "42P01", classification: "timeout", message: "database request timed out" },
+      { httpStatus: 403, code: "42501", classification: "permission_denied", message: "database permission denied" },
+      { httpStatus: 401, code: "", classification: "authentication_or_permission_error", message: "database request authentication rejected" },
+    ];
+    for (const expected of cases) {
+      const result = await runConnectivityDiagnostic({
+        authorization: "Bearer test_only_diagnostic_token_0123456789",
+        diagnosticToken: "test_only_diagnostic_token_0123456789",
+        supabase: new SupabaseService({
+          url: "https://example.supabase.co",
+          publishableKey: "test-publishable-key",
+          serviceRoleKey: "test-service-key",
+          fetchImpl: async () => Response.json({ code: expected.code, message: "sensitive provider response" }, { status: expected.httpStatus }),
+        }),
+        cj: { call: async () => ({ data: [] }) },
+      });
+      assert.equal(result.body.checks.supabase.classification, expected.classification);
+      assert.equal(result.body.checks.supabase.message, expected.message);
+      assert.equal(result.body.checks.supabase.httpStatus, expected.httpStatus);
+    }
+  } finally { console.warn = originalWarn; }
+});
+
+test("successful Supabase HTTP response with invalid JSON has a safe classification", async () => {
+  const logged = [];
+  const originalWarn = console.warn;
+  console.warn = (line) => logged.push(line);
+  try {
+    const result = await runConnectivityDiagnostic({
+      authorization: "Bearer test_only_diagnostic_token_0123456789",
+      diagnosticToken: "test_only_diagnostic_token_0123456789",
+      supabase: new SupabaseService({
+        url: "https://example.supabase.co",
+        publishableKey: "test-publishable-key",
+        serviceRoleKey: "test-service-key",
+        fetchImpl: async () => new Response("raw secret body and access token", { status: 200 }),
+      }),
+      cj: { call: async () => ({ data: [] }) },
+    });
+    assert.equal(result.body.checks.supabase.classification, "invalid_provider_response");
+    assert.equal(result.body.checks.supabase.httpStatus, 200);
+    assert.equal(JSON.stringify(result.body).includes("raw secret body"), false);
+    assert.equal(logged.join("\n").includes("raw secret body"), false);
+  } finally { console.warn = originalWarn; }
 });
 
 test("connectivity diagnostic rejects unauthorized requests before calling providers", async () => {

@@ -10,26 +10,44 @@ export function isDiagnosticAuthorized(authorization, expectedToken) {
 }
 
 function safeProviderDiagnostic(provider, error) {
-  const httpStatus = Number.isInteger(error?.httpStatus) ? error.httpStatus : null;
+  const httpStatus = Number.isInteger(error?.httpStatus) && error.httpStatus >= 100 && error.httpStatus <= 599 ? error.httpStatus : null;
   if (provider === "supabase") {
     const code = typeof error?.providerCode === "string" && /^[A-Z0-9_-]{1,32}$/.test(error.providerCode)
       ? error.providerCode : null;
-    const safeMessage = code === "42501" ? "database permission denied"
+    const classification = [408, 504].includes(httpStatus) || error?.timeoutFailure ? "timeout"
+      : code === "42501" ? "permission_denied"
+      : ["PGRST205", "42P01"].includes(code) ? "table_unavailable"
+      : httpStatus === 401 || httpStatus === 403 ? "authentication_or_permission_error"
+      : error?.networkFailure ? "network_error"
+      : error?.protocolFailure ? "invalid_provider_response"
+      : "provider_error";
+    const safeMessage = [408, 504].includes(httpStatus) || error?.timeoutFailure ? "database request timed out"
+      : code === "42501" ? "database permission denied"
       : ["PGRST205", "42P01"].includes(code) ? "expected database table unavailable"
       : httpStatus === 401 || httpStatus === 403 ? "database request authentication rejected"
       : error?.networkFailure ? "database network request failed"
+      : error?.protocolFailure ? "database returned an invalid response"
       : "database request failed";
-    return { providerCode: code, httpStatus, message: safeMessage };
+    return { classification, phase: "database_query", providerCode: code, httpStatus, message: safeMessage };
   }
-  const code = Number.isInteger(error?.cjCode) ? error.cjCode : null;
-  const safeMessage = error?.networkFailure ? "CJ network request failed"
-    : code === 1600001 || code === 1600002 ? "CJ authentication rejected"
+  const code = Number.isInteger(error?.cjCode) && error.cjCode >= 0 && error.cjCode <= 9999999999 ? error.cjCode : null;
+  const classification = error?.timeoutFailure || code === 1600301 || [408, 504].includes(httpStatus) ? "timeout"
+    : error?.networkFailure ? "network_error"
+    : [1600001, 1600002, 1600004, 1600005, 1600006, 1601000].includes(code) ? "authentication_error"
+    : code === 1600003 ? "token_refresh_error"
+    : code === 1600200 ? "rate_limited"
+    : error?.protocolFailure ? "invalid_provider_response"
+    : httpStatus && httpStatus >= 400 ? "http_error"
+    : "provider_error";
+  const safeMessage = error?.timeoutFailure || code === 1600301 || [408, 504].includes(httpStatus) ? "CJ request timed out"
+    : error?.networkFailure ? "CJ network request failed"
+    : [1600001, 1600002, 1600004, 1600005, 1600006].includes(code) ? "CJ authentication or account authorization rejected"
     : code === 1600003 ? "CJ token refresh rejected"
     : code === 1601000 ? "CJ account or API key not recognized"
     : code === 1600200 ? "CJ rate limit reached"
     : code !== null ? "CJ provider request failed"
     : "CJ request failed";
-  return { providerCode: code, httpStatus, message: safeMessage };
+  return { classification, phase: error?.cjPhase === "authentication" ? "token_generation" : "category_request", providerCode: code, httpStatus, message: safeMessage };
 }
 
 async function check(provider, operation) {
@@ -40,8 +58,9 @@ async function check(provider, operation) {
   } catch (error) {
     // Log only an allowlisted provider code/status and a fixed sanitized message.
     // Never include raw messages, URLs, headers, response bodies, or stack traces.
-    console.warn(JSON.stringify({ event: "connectivity_check_failed", provider, ...safeProviderDiagnostic(provider, error) }));
-    return { status: "error", latencyMs: Date.now() - startedAt };
+    const diagnostic = safeProviderDiagnostic(provider, error);
+    console.warn(JSON.stringify({ event: "connectivity_check_failed", provider, ...diagnostic }));
+    return { status: "error", latencyMs: Date.now() - startedAt, ...diagnostic };
   }
 }
 
