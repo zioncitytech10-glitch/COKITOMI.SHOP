@@ -1,28 +1,52 @@
 const API_KEY_PATH = "/authentication/getAccessToken";
 const REFRESH_PATH = "/authentication/refreshAccessToken";
 const EXPIRY_SKEW_MS = 5 * 60 * 1000;
+const MAX_RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_BACKOFF_BASE_MS = 1000;
+const RATE_LIMIT_BACKOFF_MAX_MS = 8000;
+const CONNECTIVITY_CACHE_MS = 60 * 1000;
 const expiryTime = (value) => {
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : Date.now() + 180 * 24 * 60 * 60 * 1000;
 };
 
+function parseRetryAfter(value, now) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const trimmed = value.trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const date = Date.parse(trimmed);
+  return Number.isFinite(date) ? Math.max(0, date - now) : null;
+}
+
+const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
 export class CjClient {
-  constructor({ apiKey, baseUrl, minIntervalMs = 1100, fetchImpl = fetch }) {
+  constructor({ apiKey, baseUrl, minIntervalMs = 1100, fetchImpl = fetch, nowImpl = Date.now, sleepImpl = sleep }) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.fetchImpl = fetchImpl;
-    this.minIntervalMs = minIntervalMs;
+    this.minIntervalMs = Math.max(1000, Number(minIntervalMs) || 0);
+    this.nowImpl = nowImpl;
+    this.sleepImpl = sleepImpl;
     this.token = null;
     this.refreshToken = null;
     this.expiresAt = 0;
     this.tokenPromise = null;
-    this.lastRequestAt = 0;
+    this.lastRequestAt = null;
+    this.cooldownUntil = 0;
+    this.requestQueue = Promise.resolve();
+    this.connectivityCache = null;
+    this.connectivityPromise = null;
   }
 
-  async #request(path, { method = "GET", body, accessToken } = {}) {
-    const delay = this.minIntervalMs - (Date.now() - this.lastRequestAt);
-    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
-    this.lastRequestAt = Date.now();
+  #enqueue(operation) {
+    const pending = this.requestQueue.then(operation);
+    this.requestQueue = pending.then(() => undefined, () => undefined);
+    return pending;
+  }
+
+  async #requestOnce(path, { method = "GET", body, accessToken } = {}) {
     let response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -43,6 +67,8 @@ export class CjClient {
       const error = new Error("CJ returned a non-JSON response");
       error.httpStatus = response.status;
       error.protocolFailure = true;
+      error.rateLimited = response.status === 429;
+      error.retryAfterMs = parseRetryAfter(response.headers?.get("Retry-After"), this.nowImpl());
       throw error;
     }
     if (!response.ok || data?.result === false) {
@@ -50,9 +76,60 @@ export class CjClient {
       const err = new Error("CJ provider request failed");
       err.cjCode = Number.isInteger(parsedCode) ? parsedCode : null;
       err.httpStatus = response.status;
+      err.rateLimited = response.status === 429 || err.cjCode === 1600200;
+      if (err.rateLimited) err.retryAfterMs = parseRetryAfter(response.headers?.get("Retry-After"), this.nowImpl());
       throw err;
     }
     return data;
+  }
+
+  async #request(path, options = {}) {
+    // Serialize complete attempts, including retry waits, so parallel callers
+    // cannot observe the same last-request timestamp and burst past the limit.
+    return this.#enqueue(async () => {
+      let retryIndex = 0;
+      while (true) {
+        const now = this.nowImpl();
+        const spacingWait = this.lastRequestAt === null ? 0 : Math.max(0, this.minIntervalMs - (now - this.lastRequestAt));
+        const cooldownWait = Math.max(0, this.cooldownUntil - now);
+        const wait = Math.max(spacingWait, cooldownWait);
+        if (wait > 0) await this.sleepImpl(wait);
+        this.lastRequestAt = this.nowImpl();
+
+        try {
+          return await this.#requestOnce(path, options);
+        } catch (error) {
+          if (!error.rateLimited) throw error;
+
+          const backoff = Math.min(RATE_LIMIT_BACKOFF_MAX_MS, RATE_LIMIT_BACKOFF_BASE_MS * (2 ** retryIndex));
+          const delay = Math.max(backoff, error.retryAfterMs || 0);
+          this.cooldownUntil = Math.max(this.cooldownUntil, this.nowImpl() + delay);
+          if (retryIndex >= MAX_RATE_LIMIT_RETRIES) throw error;
+          retryIndex++;
+        }
+      }
+    });
+  }
+
+  async checkConnectivity() {
+    const now = this.nowImpl();
+    if (this.connectivityCache && now < this.connectivityCache.expiresAt) {
+      if (this.connectivityCache.error) throw this.connectivityCache.error;
+      return { data: true };
+    }
+    if (this.connectivityPromise) return this.connectivityPromise;
+
+    this.connectivityPromise = this.call("/product/getCategory").then(
+      () => {
+        this.connectivityCache = { expiresAt: this.nowImpl() + CONNECTIVITY_CACHE_MS, error: null };
+        return { data: true };
+      },
+      (error) => {
+        this.connectivityCache = { expiresAt: this.nowImpl() + CONNECTIVITY_CACHE_MS, error };
+        throw error;
+      },
+    ).finally(() => { this.connectivityPromise = null; });
+    return this.connectivityPromise;
   }
 
   async #authenticate() {

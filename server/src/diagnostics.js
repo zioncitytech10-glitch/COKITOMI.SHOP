@@ -31,8 +31,10 @@ function safeProviderDiagnostic(provider, error) {
     return { classification, phase: "database_query", providerCode: code, httpStatus, message: safeMessage };
   }
   const code = Number.isInteger(error?.cjCode) && error.cjCode >= 0 && error.cjCode <= 9999999999 ? error.cjCode : null;
+  const rateLimited = httpStatus === 429 || code === 1600200;
   const classification = error?.timeoutFailure || code === 1600301 || [408, 504].includes(httpStatus) ? "timeout"
     : error?.networkFailure ? "network_error"
+    : rateLimited ? "rate_limited"
     : [1600001, 1600002, 1600004, 1600005, 1600006, 1601000].includes(code) ? "authentication_error"
     : code === 1600003 ? "token_refresh_error"
     : code === 1600200 ? "rate_limited"
@@ -41,6 +43,7 @@ function safeProviderDiagnostic(provider, error) {
     : "provider_error";
   const safeMessage = error?.timeoutFailure || code === 1600301 || [408, 504].includes(httpStatus) ? "CJ request timed out"
     : error?.networkFailure ? "CJ network request failed"
+    : rateLimited ? "CJ rate limit reached"
     : [1600001, 1600002, 1600004, 1600005, 1600006].includes(code) ? "CJ authentication or account authorization rejected"
     : code === 1600003 ? "CJ token refresh rejected"
     : code === 1601000 ? "CJ account or API key not recognized"
@@ -74,7 +77,7 @@ export async function runConnectivityDiagnostic({ authorization, diagnosticToken
 
   const [supabaseCheck, cjCheck] = await Promise.all([
     check("supabase", () => supabase.checkConnectivity()),
-    check("cj", () => cj.call("/product/getCategory")),
+    check("cj", () => cj.checkConnectivity()),
   ]);
   const checks = {
     server: { status: "ok" },
