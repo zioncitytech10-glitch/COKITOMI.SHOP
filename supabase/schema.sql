@@ -11,6 +11,7 @@ create table if not exists public.products (
   slug text not null unique,
   name text not null,
   description text,
+  detail_description text,
   price numeric(10,2) not null check (price >= 0),
   currency char(3) not null default 'USD',
   image_url text,

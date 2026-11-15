@@ -6,8 +6,8 @@ server/.env
 server/.env.*
 !server/.env.example
 
-# Keep the configured browser key out of source control; copy from the safe template when deploying.
-/supabase-config.js
+# This file contains only the public Supabase URL and publishable key used by the static storefront.
+# Never put service-role keys, CJ credentials, or other backend secrets in this file.
 
 # Downloaded project bundle duplicates the source tree and may include local config.
 /COKITOMI-SHOP-COMPLETE.zip
