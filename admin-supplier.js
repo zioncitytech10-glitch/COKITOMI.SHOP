@@ -33,7 +33,7 @@ export async function renderSupplierView(host, api) {
       const result = await api("/api/admin/cj/research", { method: "POST", body: JSON.stringify({ keywords: ["teddy bear", "plush bear", "giant teddy bear", "rose teddy bear", "teddy bear gift"], productFlags: [0, 1] }) });
       status.value = "pending"; const d = result.diagnostics || {};
       const failureSummary = Array.isArray(d.failures) && d.failures.length
-        ? " Diagnostics: " + d.failures.map((item) => `${item.phase}: ${item.classification}${item.providerCode ? ` (code ${item.providerCode})` : ""}${item.endpoint ? ` at ${item.endpoint}` : ""}${item.productId ? ` for product ${item.productId}` : ""}${item.requestId ? ` [CJ request ${item.requestId}]` : ""}`).join("; ")
+        ? " Diagnostics: " + d.failures.map((item) => `${item.phase}: ${item.classification}${item.providerCode ? ` (code ${item.providerCode})` : ""}${item.endpoint ? ` at ${item.endpoint}` : ""}${item.productId ? ` for product ${item.productId}` : ""}${item.requestId ? ` [CJ request ${item.requestId}]` : ""}${item.stage ? ` [stage ${item.stage}]` : ""}${item.errorType ? ` [${item.errorType}]` : ""}`).join("; ")
         : "";
       notice.textContent = `Research complete. ${result.saved ?? 0} recommendation record${result.saved === 1 ? "" : "s"} saved. Searches: ${d.searchesSucceeded ?? 0}/${d.searchesAttempted ?? 0} successful; CJ products: ${d.productsReturned ?? 0}; unique: ${d.uniqueProducts ?? 0}; evaluated: ${d.productsEvaluated ?? 0}; evaluation failures: ${d.evaluationFailures ?? 0}.${failureSummary}`;
       await refresh();
