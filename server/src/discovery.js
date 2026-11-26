@@ -147,14 +147,15 @@ function safeFailure(phase, error) {
 export class ProductDiscovery {
   constructor({ cj, config, supabase }) { this.cj = cj; this.config = config; this.supabase = supabase; this.categoryCache = null; }
 
-  async search({ keyword, productFlag, categoryId } = {}) {
+  async search({ keyword, productFlag, categoryId, countryCode = "US" } = {}) {
     const query = {
       ...(keyword ? { keyWord: keyword } : {}),
       ...(categoryId ? { categoryId } : {}),
-      countryCode: "US",
+      ...(countryCode ? { countryCode } : {}),
       ...(productFlag === undefined ? {} : { productFlag }),
       page: 1,
-      size: Math.min(50, Math.max(1, this.config.maxCandidates)),
+      // Use a larger page for discovery; warehouse and shipping suitability are verified later.
+      size: Math.min(100, Math.max(50, this.config.maxCandidates)),
       features: ["enable_category", "enable_description"],
     };
     const response = await this.cj.call("/product/listV2", { query });
@@ -208,7 +209,7 @@ export class ProductDiscovery {
             diagnostics.searchesAttempted++;
             diagnostics.categoryDiscovery.categorySearches++;
             try {
-              const results = await this.search({ categoryId: searchQuery.categoryId, keyword: searchQuery.keyword });
+              const results = await this.search({ categoryId: searchQuery.categoryId, keyword: searchQuery.keyword, countryCode: null });
               diagnostics.searchesSucceeded++;
               diagnostics.productsReturned += results.length;
               for (const product of results) {
