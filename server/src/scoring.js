@@ -1,10 +1,10 @@
 const n = (v) => Number.isFinite(Number(v)) ? Number(v) : null;
 
-export function scoreCandidate(candidate, { retailMultiplier = 2.5, paymentFeeRate = 0.03 } = {}) {
+export function scoreCandidate(candidate, { retailMultiplier = 2.5, targetMargin = null, paymentFeeRate = 0.03 } = {}) {
   const productCost = n(candidate.supplierPrice) ?? 0;
   const shippingCost = n(candidate.shippingCost) ?? 0;
   const landedCost = productCost + shippingCost;
-  const suggestedRetail = Number((landedCost * retailMultiplier).toFixed(2));
+  // When a target margin is configured, price to achieve it after the estimated\n  // payment fee. Keep the multiplier fallback for older callers and tests.\n  const effectiveMultiplier = Number.isFinite(targetMargin)\n    ? 1 / Math.max(0.01, 1 - targetMargin - paymentFeeRate)\n    : retailMultiplier;\n  const suggestedRetail = Number((landedCost * effectiveMultiplier).toFixed(2));
   const estimatedPaymentFee = Number((suggestedRetail * paymentFeeRate).toFixed(2));
   const estimatedProfit = Number((suggestedRetail - landedCost - estimatedPaymentFee).toFixed(2));
   const margin = suggestedRetail > 0 ? estimatedProfit / suggestedRetail : 0;
