@@ -505,13 +505,20 @@ const server = createServer(async (req, res) => {
     return send(res, 404, { error: "Not found" });
 
   } catch (error) {
-    // Never log request headers, CJ payloads, tokens or environment values.
+    // Safe diagnostics. Never log request headers, tokens,
+    // passwords, CJ payloads, or environment variables.
     console.error(
       JSON.stringify({
         requestId,
-        error: error.status
-          ? error.message
-          : "Internal service error",
+        method: req.method,
+        path: req.url?.split("?")[0] || null,
+        errorName: error?.name || "Error",
+        httpStatus: error?.httpStatus || null,
+        providerCode: error?.providerCode || null,
+        requestStatus: error?.status || null,
+        timeoutFailure: error?.timeoutFailure || false,
+        networkFailure: error?.networkFailure || false,
+        protocolFailure: error?.protocolFailure || false,
       }),
     );
 
