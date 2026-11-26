@@ -21,7 +21,8 @@
   const getProduct = id => products.find(product => product.id === Number(id));
   const productUrl = id => {
     const product = getProduct(id);
-    return product?.slug ? `product-${product.slug}.html` : `product.html?id=${encodeURIComponent(id)}`;
+    return product?.catalogueSource === "supabase" ? `product.html?id=${encodeURIComponent(product.id)}`
+      : product?.slug ? `product-${product.slug}.html` : `product.html?id=${encodeURIComponent(id)}`;
   };
 
   function loadCart() {
@@ -29,7 +30,7 @@
       const saved = JSON.parse(localStorage.getItem("cokitomi-cart") || "[]");
       if (!Array.isArray(saved)) return [];
       return saved
-        .filter(item => item && getProduct(item.id) && Number.isInteger(item.qty) && item.qty > 0)
+        .filter(item => item && Number.isSafeInteger(Number(item.id)) && Number(item.id) > 0 && Number.isInteger(item.qty) && item.qty > 0)
         .map(item => ({ id: Number(item.id), qty: item.qty }));
     } catch {
       return [];
@@ -123,7 +124,7 @@
       <div class="product-info">
         <h3><a href="${url}">${name}</a></h3>
         <p>${escapeHtml(product.description)}</p>
-        <span class="demo-availability">Demo product · availability unconfirmed</span>
+        <span class="demo-availability">${product.catalogueSource === "supabase" ? "Storefront listing · supplier fulfilment not enabled" : "Demo product · availability unconfirmed"}</span>
         <span class="price">${money(product.price)}</span>
         <div class="product-actions">
           <a class="button button-light view-product" href="${url}">View Product</a>
@@ -152,7 +153,7 @@
     const target = document.getElementById(targetId);
     if (target) target.innerHTML = list.length
       ? list.map(productCard).join("")
-      : `<div class="catalogue-empty"><p>No demo products are assigned to this collection yet.</p><a class="text-link" href="shop.html">Browse all products →</a></div>`;
+      : `<div class="catalogue-empty"><p>No products are assigned to this collection yet.</p><a class="text-link" href="shop.html">Browse all products →</a></div>`;
   }
 
   function initHome() {
@@ -188,7 +189,7 @@
       if (sortMode === "newest") list.sort((a, b) => b.newestRank - a.newestRank);
       renderProducts("shopGrid", list);
       const status = document.getElementById("shopResultCount");
-      if (status) status.textContent = `${list.length} demo product${list.length === 1 ? "" : "s"}`;
+      if (status) status.textContent = `${list.length} product${list.length === 1 ? "" : "s"}`;
     };
     search.addEventListener("input", update);
     collectionFilter.addEventListener("change", update);
@@ -234,7 +235,7 @@
           <h1>${productName}</h1>
           <p class="detail-price">${money(product.price)}</p>
           <p class="detail-description">${escapeHtml(product.detailDescription)}</p>
-          <p class="detail-availability">Demo product · Availability and fulfilment unconfirmed</p>
+          <p class="detail-availability">${product.catalogueSource === "supabase" ? "Supplier fulfilment is not enabled for this storefront listing." : "Demo product · Availability and fulfilment unconfirmed"}</p>
         <section class="specifications" aria-labelledby="specificationsTitle">
           <h2 id="specificationsTitle">Product details</h2>
           <dl>${(product.specifications || []).map(specification => `<div><dt>${escapeHtml(specification.label)}</dt><dd>${escapeHtml(specification.value)}</dd></div>`).join("")}</dl>
@@ -274,7 +275,15 @@
 
   function cartRow(item, pageView = false) {
     const product = getProduct(item.id);
-    if (!product) return "";
+    if (!product) return `<article class="cart-item${pageView ? " cart-page-item" : ""}">
+      <div class="cart-item-copy"><h3>Catalogue item unavailable</h3><p>Product details could not be loaded. This saved item remains in your bag.</p>
+        <div class="cart-quantity" aria-label="Quantity controls for unavailable item">
+          <button type="button" data-cart-step="-1" data-product-id="${item.id}" aria-label="Decrease unavailable item quantity">−</button>
+          <span>Qty ${item.qty}</span>
+          <button type="button" data-cart-step="1" data-product-id="${item.id}" aria-label="Increase unavailable item quantity">+</button>
+        </div><button class="remove-item" type="button" data-remove-product="${item.id}">Remove</button>
+      </div><strong class="cart-line-total">Unavailable</strong>
+    </article>`;
     const name = escapeHtml(product.name);
     const image = escapeHtml(product.image);
     const url = escapeHtml(productUrl(product.id));
@@ -282,7 +291,7 @@
       <a class="cart-item-image" href="${url}"><img src="${image}" alt="${name}"></a>
       <div class="cart-item-copy">
         <h3><a href="${url}">${name}</a></h3>
-        <p>${money(product.price)} each · Demo product</p>
+        <p>${money(product.price)} each${product.catalogueSource === "supabase" ? "" : " · Demo product"}</p>
         <div class="cart-quantity" aria-label="Quantity controls for ${name}">
           <button type="button" data-cart-step="-1" data-product-id="${product.id}" aria-label="Decrease ${name} quantity">−</button>
           <span>Qty ${item.qty}</span>
@@ -296,25 +305,26 @@
 
   function cartTotals() {
     const count = cart.reduce((total, item) => total + item.qty, 0);
+    const hasUnavailable = cart.some(item => !getProduct(item.id));
     const subtotal = cart.reduce((total, item) => total + (getProduct(item.id)?.price || 0) * item.qty, 0);
-    return { count, subtotal };
+    return { count, subtotal, hasUnavailable };
   }
 
   function renderCart() {
-    const { count, subtotal } = cartTotals();
+    const { count, subtotal, hasUnavailable } = cartTotals();
     const countBadge = document.getElementById("cartCount");
     if (countBadge) countBadge.textContent = count;
     const drawerCount = document.getElementById("drawerCount");
     if (drawerCount) drawerCount.textContent = `(${count})`;
     const drawerSubtotal = document.getElementById("cartSubtotal");
-    if (drawerSubtotal) drawerSubtotal.textContent = money(subtotal);
+    if (drawerSubtotal) drawerSubtotal.textContent = hasUnavailable ? "Unavailable" : money(subtotal);
     const drawerItems = document.getElementById("cartItems");
     if (drawerItems) drawerItems.innerHTML = cart.length ? cart.map(item => cartRow(item)).join("") : emptyCartMarkup();
 
     const pageItems = document.getElementById("cartPageItems");
     if (pageItems) pageItems.innerHTML = cart.length ? cart.map(item => cartRow(item, true)).join("") : emptyCartMarkup();
     const pageSubtotal = document.getElementById("cartPageSubtotal");
-    if (pageSubtotal) pageSubtotal.textContent = money(subtotal);
+    if (pageSubtotal) pageSubtotal.textContent = hasUnavailable ? "Unavailable" : money(subtotal);
     const pageCount = document.getElementById("cartPageCount");
     if (pageCount) pageCount.textContent = `${count} item${count === 1 ? "" : "s"}`;
     // Checkout intentionally remains disabled on both the drawer and cart page.
@@ -331,8 +341,35 @@
     rows.forEach(row => {
       if (!row || row.is_active !== true || typeof row.slug !== "string") return;
       if (String(row.currency || "USD").trim().toUpperCase() !== "USD") return;
-      const product = products.find(item => item.slug === row.slug);
-      if (!product) return;
+      let product = products.find(item => item.slug === row.slug);
+      if (!product) {
+        const databaseId = Number(row.id);
+        if (!Number.isSafeInteger(databaseId) || databaseId < 1) return;
+        const runtimeId = products.some(item => item.id === databaseId)
+          ? 1000000000 + databaseId
+          : databaseId;
+        if (!Number.isSafeInteger(runtimeId) || products.some(item => item.id === runtimeId)) return;
+        product = {
+          id: runtimeId,
+          slug: row.slug,
+          name: typeof row.name === "string" ? row.name.trim() : "",
+          price: Number(row.price),
+          description: typeof row.description === "string" ? row.description.trim() : "",
+          detailDescription: typeof row.detail_description === "string" ? row.detail_description.trim() : "",
+          image: safeCatalogueImage(row.image_url),
+          additionalImages: [],
+          specifications: [],
+          collections: Array.isArray(row.collection_ids) ? row.collection_ids.filter(value => typeof value === "string") : [],
+          isBestseller: false,
+          isNew: false,
+          newestRank: products.length + 1,
+          catalogueSource: "supabase",
+          databaseId,
+          stockQuantity: row.stock_quantity,
+        };
+        if (!product.name || !product.image || !Number.isFinite(product.price) || product.price < 0) return;
+        products.push(product);
+      }
 
       const name = typeof row.name === "string" ? row.name.trim() : "";
       const description = typeof row.description === "string" ? row.description.trim() : "";
@@ -347,6 +384,10 @@
         .map(safeCatalogueImage)
         .filter(image => image && image !== product.image);
       product.additionalImages = [...new Set([...(product.additionalImages || []), ...databaseImages])];
+      if (product.catalogueSource === "supabase") {
+        product.collections = Array.isArray(row.collection_ids) ? row.collection_ids.filter(value => typeof value === "string") : [];
+        product.stockQuantity = row.stock_quantity;
+      }
       matched += 1;
     });
     return matched;

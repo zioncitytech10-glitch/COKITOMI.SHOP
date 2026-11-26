@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self'; connect-src 'self' https://*.supabase.co https://cokitomi-api.onrender.com; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>COKITOMI Admin</title>
+  <link rel="stylesheet" href="../../admin.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="../../supabase-config.js"></script>
+  <script src="../../admin.js" type="module"></script>
+</head>
+<body>
+  <main class="auth-shell" id="authView">
+    <section class="auth-card" aria-labelledby="loginTitle">
+      <a class="brand" href="../../index.html">COKITOMI<span>ADMIN</span></a>
+      <p class="eyebrow">PRIVATE BUSINESS DASHBOARD</p>
+      <h1 id="loginTitle">Sign in</h1>
+      <p class="muted">Use your Supabase account. Administrator access is checked by the COKITOMI server.</p>
+      <form id="loginForm">
+        <label for="email">Email address</label>
+        <input id="email" name="email" type="email" autocomplete="username" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <button class="primary-button" type="submit" id="loginButton">Sign in securely</button>
+      </form>
+      <p class="notice" id="authMessage" role="status" aria-live="polite"></p>
+    </section>
+  </main>
+
+  <div class="dashboard-shell" id="dashboardView" hidden>
+    <aside class="sidebar" aria-label="Admin navigation">
+      <a class="brand" href="../../admin.html">COKITOMI<span>ADMIN</span></a>
+      <p class="nav-heading">BUSINESS</p>
+      <nav class="nav-list">
+        <button class="nav-item active" type="button" data-view="overview" aria-current="page">Overview</button>
+        <button class="nav-item" type="button" data-view="products">Products</button>
+        <button class="nav-item" type="button" disabled>Orders <span>Later stage</span></button>
+        <button class="nav-item" type="button" disabled>Customers <span>Later stage</span></button>
+        <button class="nav-item" type="button" data-view="supplier">CJ Supplier research</button>
+      </nav>
+      <p class="sidebar-foot">Private admin area</p>
+    </aside>
+    <section class="main-panel">
+      <header class="topbar">
+        <div><p class="eyebrow">COKITOMI.SHOP</p><h1>Business overview</h1></div>
+        <div class="account-tools"><span id="adminEmail"></span><button class="quiet-button" type="button" id="logoutButton">Log out</button></div>
+      </header>
+      <main class="content" id="overviewContent" aria-live="polite"><p class="muted">Loading verified dashboard data…</p></main>
+      <p class="page-foot">Dashboard figures come from Supabase. Revenue is unavailable until verified payment processing is configured.</p>
+    </section>
+  </div>
+</body>
+</html>

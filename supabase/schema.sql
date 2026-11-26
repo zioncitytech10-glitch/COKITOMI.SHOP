@@ -16,6 +16,7 @@ create table if not exists public.products (
   currency char(3) not null default 'USD',
   image_url text,
   gallery_urls text[] not null default '{}',
+  collection_ids text[] not null default '{}',
   stock_quantity integer check (stock_quantity is null or stock_quantity >= 0),
   is_active boolean not null default false,
   created_at timestamptz not null default now(),

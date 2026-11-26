@@ -9,6 +9,17 @@ const agingDays = (x) => {
   const matches = String(x).match(/\d+(?:\.\d+)?/g);
   return matches?.length ? Math.max(...matches.map(Number)) : null;
 };
+const imageUrl = (value) => typeof value === "string" ? value
+  : value && typeof value === "object" ? first(value.imageUrl, value.url, value.bigImage, value.image) : null;
+const knownNumber = (...values) => {
+  for (const value of values) {
+    if (value === undefined || value === null || value === "") continue;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  }
+  return null;
+};
+const variantId = (variant) => String(first(variant.vid, variant.variantId, variant.id, ""));
 
 export class ProductDiscovery {
   constructor({ cj, config, supabase }) { this.cj = cj; this.config = config; this.supabase = supabase; }
@@ -50,19 +61,43 @@ export class ProductDiscovery {
     const detailsResponse = await this.cj.call("/product/productDetail/query", { method: "POST", body: { id: pid } });
     const detail = detailsResponse.data || {};
     const variants = Array.isArray(detail.variants) ? detail.variants : [];
-    const variant = variants.find((v) => num(first(v.variantInventory, v.inventory, v.stock)) > 0) || variants[0] || {};
-    const vid = String(first(variant.vid, variant.variantId, ""));
-    let stock = first(variant.variantInventory, variant.inventory, variant.stock, 0);
-    let usStock = first(variant.usInventory, variant.USInventory, 0);
-    if (vid) {
-      const stockResponse = await this.cj.call("/product/stock/queryByVid", { query: { vid } }).catch(() => null);
-      const stockRows = unwrap(stockResponse);
-      if (stockRows.length) {
-        stock = stockRows.reduce((sum, row) => sum + (num(first(row.totalInventoryNum, row.totalInventory, row.storageNum, row.inventory)) || 0), 0);
-        usStock = stockRows.filter((row) => String(first(row.countryCode, row.country, "")).toUpperCase() === "US")
-          .reduce((sum, row) => sum + (num(first(row.totalInventoryNum, row.totalInventory, row.storageNum, row.inventory)) || 0), 0);
+    const variantRecords = await Promise.all(variants.map(async (entry) => {
+      const vid = variantId(entry);
+      let stock = knownNumber(entry.variantInventory, entry.inventory, entry.stock);
+      let usStock = knownNumber(entry.usInventory, entry.USInventory);
+      let warehouseStock = [];
+      if (vid && (stock === null || usStock === null)) {
+        const stockRows = unwrap(await this.cj.call("/product/stock/queryByVid", { query: { vid } }).catch(() => null));
+        warehouseStock = stockRows.map((row) => ({
+          country: String(first(row.countryCode, row.country, row.areaCode, "")).toUpperCase() || null,
+          warehouse: first(row.warehouseName, row.storageName, row.warehouseCode, row.storageCode) || null,
+          quantity: knownNumber(row.totalInventoryNum, row.totalInventory, row.storageNum, row.inventory),
+        }));
+        const knownStocks = warehouseStock.filter((row) => row.quantity !== null);
+        if (stock === null && knownStocks.length) stock = knownStocks.reduce((sum, row) => sum + row.quantity, 0);
+        if (usStock === null && knownStocks.some((row) => row.country === "US")) {
+          usStock = knownStocks.filter((row) => row.country === "US").reduce((sum, row) => sum + row.quantity, 0);
+        }
       }
-    }
+      return {
+        id: vid || null,
+        sku: first(entry.variantSku, entry.sku) || null,
+        name: first(entry.variantName, entry.variantKey, entry.variantNameEn) || null,
+        image_url: imageUrl(first(entry.variantImage, entry.image, entry.imageUrl)) || null,
+        price: knownNumber(entry.variantSellPrice, entry.variantPrice, entry.sellPrice),
+        stock,
+        stock_verified: stock !== null,
+        us_stock: usStock,
+        us_stock_verified: usStock !== null,
+        warehouses: warehouseStock,
+        options: first(entry.variantKey, entry.variantProperty, entry.property) || null,
+      };
+    }));
+    const variant = variants.find((entry) => knownNumber(entry.variantInventory, entry.inventory, entry.stock) > 0) || variants[0] || {};
+    const vid = variantId(variant);
+    const selected = variantRecords.find((entry) => entry.id === vid) || variantRecords[0] || null;
+    const stock = selected?.stock ?? null;
+    const usStock = selected?.us_stock ?? null;
     const reviewResponse = await this.cj.call("/product/productComments", { query: { pid, pageNum: 1, pageSize: 20 } }).catch(() => null);
     const reviewRows = unwrap(reviewResponse);
     const ratings = reviewRows.map((r) => num(first(r.score, r.rating, r.star))).filter((x) => x !== null);
@@ -91,7 +126,8 @@ export class ProductDiscovery {
         shipping = sorted[0] || null;
       }
     }
-    const supplierPrice = num(first(variant.variantSellPrice, variant.variantPrice, detail.sellPrice, detail.productSellPrice, summary.sellPrice)) || 0;
+    const rawSupplierPrice = knownNumber(variant.variantSellPrice, variant.variantPrice, detail.sellPrice, detail.productSellPrice, summary.sellPrice);
+    const supplierPrice = rawSupplierPrice ?? 0;
     const info = {
       supplierPrice,
       shippingCost: shipping?.cost ?? 0,
@@ -111,10 +147,14 @@ export class ProductDiscovery {
       cj_variant_id: vid || null,
       title: title.slice(0, 300),
       description: String(first(detail.description, detail.productDescription, "")).slice(0, 5000),
-      image_url: first(detail.bigImage, detail.productImage, detail.productImageUrl, summary.bigImage, summary.productImage, summary.productImageUrl) || null,
-      gallery: Array.isArray(detail.productImageSet) ? detail.productImageSet.slice(0, 20) : Array.isArray(detail.image) ? detail.image.slice(0, 20) : [],
-      variant_data: { sku: sku || null, name: first(variant.variantName, variant.variantKey), options: variant.variantKey || null },
-      supplier_data: { supplier: "CJdropshipping", country: sourceCountry, warehouse_us_inventory: info.usInventory },
+      image_url: imageUrl(first(detail.bigImage, detail.productImage, detail.productImageUrl, summary.bigImage, summary.productImage, summary.productImageUrl)),
+      gallery: [...new Set((Array.isArray(detail.productImageSet) ? detail.productImageSet : Array.isArray(detail.image) ? detail.image : [])
+        .map(imageUrl).filter((url) => typeof url === "string" && url.trim()).map((url) => url.trim()))].slice(0, 50),
+      variant_data: { sku: sku || null, name: first(variant.variantName, variant.variantKey), options: variant.variantKey || null, variants: variantRecords },
+      supplier_data: {
+        supplier: "CJdropshipping", country: sourceCountry, warehouse_us_inventory: info.usInventory,
+        inventory_verified: selected?.stock_verified === true, price_verified: rawSupplierPrice !== null,
+      },
       supplier_price: scored.supplierPrice,
       shipping_cost: shipping?.cost ?? null,
       shipping_method: shipping?.name ?? null,

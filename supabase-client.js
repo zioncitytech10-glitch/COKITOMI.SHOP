@@ -25,7 +25,7 @@
 
   window.COKITOMI_SUPABASE_PRODUCTS_PROMISE = window.cokitomiSupabase
     .from("products")
-    .select("id, slug, name, description, detail_description, price, currency, image_url, gallery_urls, is_active")
+    .select("id, slug, name, description, detail_description, price, currency, image_url, gallery_urls, collection_ids, stock_quantity, is_active")
     .eq("is_active", true)
     .order("id", { ascending: true })
     .limit(200)

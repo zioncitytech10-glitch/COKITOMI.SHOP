@@ -1,10 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { scoreCandidate } from "../src/scoring.js";
 import { CjClient } from "../src/cj-client.js";
 import { SupabaseService } from "../src/supabase.js";
 import { loadConfig } from "../src/config.js";
 import { runConnectivityDiagnostic } from "../src/diagnostics.js";
+import { authenticateAdmin, getAdminOverviewResponse } from "../src/admin-dashboard.js";
+import { ProductDiscovery } from "../src/discovery.js";
+import { validateProductChanges, validatePublishRequest } from "../src/product-management.js";
+import { logoutAndRedirect } from "../../admin-session.js";
 
 function fakeClock(startAt = 10000) {
   let current = startAt;
@@ -22,6 +27,56 @@ test("scoring includes landed cost and yields bounded commercial score", () => {
   assert.ok(scored.suggestedRetail > scored.landedCost);
   assert.ok(scored.score <= 100);
   assert.ok(scored.score > 0);
+});
+
+test("CJ research preserves every returned variant and its available fields using mocked responses", async () => {
+  const stockLookups = [];
+  let saved;
+  const cj = { async call(path, options = {}) {
+    if (path === "/product/listV2") return { data: [{ pid: "cj-bear-1", productNameEn: "Mock teddy" }] };
+    if (path === "/product/productDetail/query") return { data: {
+      productNameEn: "Mock teddy", bigImage: "https://images.example/bear.jpg", productImageSet: ["https://images.example/bear.jpg", "https://images.example/gallery.jpg"],
+      variants: [
+        { vid: "variant-a", variantName: "Brown · Small", variantSku: "SKU-A", variantSellPrice: 4.25, variantInventory: 12, usInventory: 5, variantImage: "https://images.example/a.jpg" },
+        { vid: "variant-b", variantName: "Cream · Large", variantSku: "SKU-B", variantSellPrice: 6.5, variantImage: "https://images.example/b.jpg" },
+      ],
+    } };
+    if (path === "/product/stock/queryByVid") {
+      const vid = options.query.vid; stockLookups.push(vid);
+      return { data: [{ countryCode: "US", warehouseName: "US warehouse", totalInventoryNum: 8 }, { countryCode: "CN", warehouseName: "China warehouse", totalInventoryNum: 20 }] };
+    }
+    if (path === "/product/productComments") return { data: [], total: 0 };
+    if (path === "/logistic/freightCalculateTip") return { data: [] };
+    throw new Error(`Unexpected mocked CJ path ${path}`);
+  } };
+  const discovery = new ProductDiscovery({
+    cj, config: { maxCandidates: 1, retailMultiplier: 2.5, paymentFeeRate: 0.03 },
+    supabase: { async saveRecommendations(rows) { saved = rows; } },
+  });
+  const result = await discovery.research({ keywords: ["teddy bear"], productFlags: [0] });
+  assert.deepEqual(result, { searched: 1, saved: 1 });
+  assert.deepEqual(stockLookups, ["variant-b"]);
+  const variants = saved[0].variant_data.variants;
+  assert.equal(variants.length, 2);
+  assert.deepEqual(variants.map(({ id, name, price, stock, us_stock }) => ({ id, name, price, stock, us_stock })), [
+    { id: "variant-a", name: "Brown · Small", price: 4.25, stock: 12, us_stock: 5 },
+    { id: "variant-b", name: "Cream · Large", price: 6.5, stock: 28, us_stock: 8 },
+  ]);
+  assert.equal(variants[1].image_url, "https://images.example/b.jpg");
+  assert.equal(variants[1].stock_verified, true);
+  assert.equal(variants[1].us_stock_verified, true);
+  assert.equal(saved[0].image_url, "https://images.example/bear.jpg");
+  assert.deepEqual(saved[0].gallery, ["https://images.example/bear.jpg", "https://images.example/gallery.jpg"]);
+});
+
+test("product management validates only editable catalogue fields and explicit publishing input", () => {
+  assert.deepEqual(validateProductChanges({ name: "Updated teddy", price: 42.5, is_active: true }), { name: "Updated teddy", price: 42.5, is_active: true });
+  assert.throws(() => validateProductChanges({ supplier_product_id: "cannot-change" }), { status: 400 });
+  assert.throws(() => validateProductChanges({ id: 17 }), { status: 400 });
+  assert.deepEqual(validatePublishRequest({ slug: "new-cj-teddy-17", price: 49.99, collection_ids: ["birthday-gifts"] }), {
+    slug: "new-cj-teddy-17", price: 49.99, collectionIds: ["birthday-gifts"],
+  });
+  assert.throws(() => validatePublishRequest({ slug: "invalid slug", price: 40 }), { status: 400 });
 });
 
 test("CJ requests use one shared token acquisition and never put keys in URL", async () => {
@@ -183,12 +238,158 @@ test("CJ connectivity probes coalesce and cache results to avoid repeat requests
 
 test("Supabase admin check validates bearer via Auth API and allowlists UUID", async () => {
   const id = "00000000-0000-4000-8000-000000000001";
+  let authRequests = 0;
   const supabase = new SupabaseService({ url: "https://example.supabase.co", publishableKey: "public-test", serviceRoleKey: "server-test", fetchImpl: async (_url, options) => {
+    authRequests += 1;
     assert.equal(options.headers.Authorization, "Bearer signed-test-jwt");
     return Response.json({ id });
   } });
+  assert.equal(await supabase.verifyAdmin(undefined, new Set([id])), null);
+  assert.equal(authRequests, 0);
   assert.deepEqual(await supabase.verifyAdmin("Bearer signed-test-jwt", new Set([id])), { id });
   assert.equal(await supabase.verifyAdmin("Bearer signed-test-jwt", new Set()), null);
+  assert.equal(authRequests, 2);
+});
+
+test("admin logout clears the local session and redirects to the login route", async () => {
+  let session = { access_token: "test-access-token" };
+  let scope;
+  let redirectPath;
+  const result = await logoutAndRedirect({ auth: { async signOut(options) {
+    scope = options.scope;
+    session = null;
+    return { error: null };
+  } } }, "/COKITOMI.SHOP/admin.html", (path) => { redirectPath = path; });
+
+  assert.equal(scope, "local");
+  assert.equal(session, null);
+  assert.equal(result.remoteLogoutFailed, false);
+  assert.equal(redirectPath, "/COKITOMI.SHOP/admin.html?logout=success");
+});
+
+test("admin logout remains locally cleared and visibly warns when remote logout fails", async () => {
+  let session = { access_token: "test-access-token" };
+  let redirectPath;
+  const result = await logoutAndRedirect({ auth: { async signOut(options) {
+    assert.equal(options.scope, "local");
+    session = null;
+    return { error: new Error("private simulated network failure") };
+  } } }, "/COKITOMI.SHOP/admin.html", (path) => { redirectPath = path; });
+
+  assert.equal(session, null);
+  assert.equal(result.remoteLogoutFailed, true);
+  assert.equal(redirectPath, "/COKITOMI.SHOP/admin.html?logout=warning");
+});
+
+test("admin logout still redirects with a safe warning when remote logout throws", async () => {
+  let session = { access_token: "test-access-token" };
+  let redirectPath;
+  const result = await logoutAndRedirect({ auth: { async signOut(options) {
+    assert.equal(options.scope, "local");
+    session = null;
+    throw new Error("private simulated network failure");
+  } } }, "/admin.html", (path) => { redirectPath = path; });
+
+  assert.equal(session, null);
+  assert.equal(result.remoteLogoutFailed, true);
+  assert.equal(redirectPath, "/admin.html?logout=warning");
+});
+test("protected overview rejects missing post-logout tokens and expired or invalid sessions", async () => {
+  let authValidations = 0;
+  let dashboardReads = 0;
+  let localSession = { access_token: "test-access-token" };
+  await logoutAndRedirect({ auth: { async signOut() { localSession = null; return { error: null }; } } }, "/admin.html", () => {});
+  const supabase = new SupabaseService({
+    url: "https://example.supabase.co",
+    publishableKey: "public-test",
+    serviceRoleKey: "server-test",
+    fetchImpl: async () => {
+      authValidations += 1;
+      return Response.json({ message: "invalid session" }, { status: 401 });
+    },
+  });
+  supabase.getAdminOverview = async () => { dashboardReads += 1; return {}; };
+  const adminUserIds = new Set(["admin-uuid"]);
+
+  const postLogoutAuthorization = localSession?.access_token ? `Bearer ${localSession.access_token}` : undefined;
+  assert.equal(postLogoutAuthorization, undefined);
+  for (const authorization of [postLogoutAuthorization, "Bearer expired-session", "Bearer invalid-session"]) {
+    const result = await getAdminOverviewResponse({ authorization, adminUserIds, supabase });
+    assert.equal(result.httpStatus, 401);
+  }
+  assert.equal(authValidations, 2);
+  assert.equal(dashboardReads, 0);
+});
+
+test("admin overview rejects unauthenticated and non-admin users before reading dashboard data", async () => {
+  let dashboardReads = 0;
+  const authCalls = [];
+  const supabase = new SupabaseService({
+    url: "https://example.supabase.co",
+    publishableKey: "public-test",
+    serviceRoleKey: "server-test",
+    fetchImpl: async (url, options) => {
+      authCalls.push({ url, authorization: options.headers.Authorization });
+      const id = options.headers.Authorization === "Bearer valid-admin" ? "admin-uuid" : "non-admin-uuid";
+      return Response.json({ id });
+    },
+  });
+  supabase.getAdminOverview = async () => { dashboardReads += 1; return {}; };
+  const adminUserIds = new Set(["admin-uuid"]);
+  const noToken = await getAdminOverviewResponse({ authorization: undefined, adminUserIds, supabase });
+  assert.equal(noToken.httpStatus, 401);
+  assert.equal(authCalls.length, 0);
+
+  const denied = await getAdminOverviewResponse({ authorization: "Bearer valid-user", adminUserIds, supabase });
+  assert.equal(denied.httpStatus, 401);
+  assert.deepEqual(denied.body, { error: "Administrator access required" });
+  assert.equal(dashboardReads, 0);
+
+  const allowed = await getAdminOverviewResponse({ authorization: "Bearer valid-admin", adminUserIds, supabase });
+  assert.equal(allowed.httpStatus, 200);
+  assert.equal(allowed.body.admin.id, "admin-uuid");
+  assert.equal(dashboardReads, 1);
+  assert.equal(authCalls.length, 2);
+});
+
+test("shared admin route authorization denies missing and non-admin sessions and accepts the allowlisted user", async () => {
+  const calls = [];
+  const supabase = { async verifyAdmin(authorization, allowedIds) {
+    calls.push({ authorization, allowedIds });
+    if (authorization === "Bearer admin-token" && allowedIds.has("admin-uuid")) return { id: "admin-uuid" };
+    return null;
+  } };
+  const adminUserIds = new Set(["admin-uuid"]);
+  assert.equal(await authenticateAdmin({ authorization: undefined, adminUserIds, supabase }), null);
+  assert.equal(await authenticateAdmin({ authorization: "Bearer customer-token", adminUserIds, supabase }), null);
+  assert.deepEqual(await authenticateAdmin({ authorization: "Bearer admin-token", adminUserIds, supabase }), { id: "admin-uuid" });
+  assert.equal(calls.length, 3);
+});
+
+test("dashboard counts use exact database counts and unavailable revenue is explicit", async () => {
+  const requested = [];
+  const supabase = new SupabaseService({
+    url: "https://example.supabase.co",
+    publishableKey: "public-test",
+    serviceRoleKey: "sb_secret_test_only_value",
+    fetchImpl: async (url, options) => {
+      requested.push({ url, headers: options.headers });
+      if (url.includes("customer_profiles")) return new Response("", { status: 403 });
+      return new Response("[{\"id\":1}]", { status: 200, headers: { "Content-Range": "0-0/4", "Content-Type": "application/json" } });
+    },
+  });
+  const overview = await supabase.getAdminOverview();
+  assert.deepEqual(overview.catalogue.total, { status: "available", value: 4 });
+  assert.deepEqual(overview.catalogue.active, { status: "available", value: 4 });
+  assert.deepEqual(overview.orders.total, { status: "available", value: 4 });
+  assert.deepEqual(overview.customers.total, { status: "unavailable", value: null });
+  assert.deepEqual(overview.revenue, {
+    status: "unavailable",
+    value: null,
+    reason: "Payment processing is not enabled; verified revenue data is unavailable.",
+  });
+  assert.ok(requested.every(({ headers }) => headers.apikey === "sb_secret_test_only_value"));
+  assert.ok(requested.every(({ url }) => !url.includes("example@email") && !url.includes("Bearer")));
 });
 
 test("modern Supabase secret key is sent as apikey, never as a Bearer JWT", async () => {
@@ -203,6 +404,109 @@ test("modern Supabase secret key is sent as apikey, never as a Bearer JWT", asyn
   await supabase.listRecommendations();
   assert.equal(seen.apikey, secretKey);
   assert.equal("Authorization" in seen, false);
+});
+
+test("admin product listing joins only linked CJ research data and edits through the service-role client", async () => {
+  const requests = [];
+  const supabase = new SupabaseService({
+    url: "https://example.supabase.co", publishableKey: "public-test", serviceRoleKey: "server-test",
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      if (url.includes("/products?")) return Response.json([
+        { id: 7, slug: "cj-teddy", name: "CJ Teddy", supplier_product_id: "cj-7", price: 45, collection_ids: [], is_active: true },
+        { id: 8, slug: "cj-teddy-2", name: "CJ Teddy 2", supplier_product_id: "cj-8", price: 45, collection_ids: [], is_active: true },
+        { id: 9, slug: "cj-teddy-3", name: "CJ Teddy 3", supplier_product_id: "cj-9", price: 45, collection_ids: [], is_active: true },
+      ]);
+      if (url.includes("product_recommendations?")) return Response.json([
+        { published_product_id: 7, cj_product_id: "cj-7", cj_variant_id: "variant-7", variant_data: { variants: [{ id: "variant-7" }] }, supplier_data: { price_verified: true }, supplier_price: 10, shipping_cost: 2, delivery_days: 8, inventory: 12, us_inventory: 4, estimated_landed_cost: 12, estimated_profit: 30, estimated_margin: 0.66 },
+        { published_product_id: 8, cj_product_id: "cj-8", variant_data: { variants: [] }, supplier_data: { price_verified: false }, supplier_price: 0, shipping_cost: null },
+        { published_product_id: 9, cj_product_id: "cj-9", variant_data: { variants: [] }, supplier_price: 0, shipping_cost: null },
+      ]);
+      return Response.json([{ id: 7, name: "Changed" }]);
+    },
+  });
+  const listed = await supabase.listProducts();
+  assert.equal(listed[0].supplier_research.cj_product_id, "cj-7");
+  assert.deepEqual(listed[0].supplier_research.variants, [{ id: "variant-7" }]);
+  assert.equal(listed[0].supplier_research.price_verified, true);
+  assert.equal(listed[0].supplier_research.supplier_price, 10);
+  assert.equal(listed[1].supplier_research.price_verified, false, "unverified supplier prices must remain marked unverified");
+  assert.equal(listed[2].supplier_research.price_verified, false, "missing supplier_data must not be treated as verified");
+  const recommendationRequest = requests.find(({ url }) => url.includes("product_recommendations?"));
+  assert.match(recommendationRequest.url, /supplier_data/);
+  const updated = await supabase.updateProduct(7, { name: "Changed" });
+  assert.equal(updated.id, 7);
+  assert.ok(requests.every(({ options }) => options.headers.apikey === "server-test"));
+  assert.ok(requests.some(({ url, options }) => url.includes("products?id=eq.7") && options.method === "PATCH"));
+});
+
+test("recommendation review and explicit publish use private service-role RPCs", async () => {
+  const calls = [];
+  const supabase = new SupabaseService({
+    url: "https://example.supabase.co", publishableKey: "public-test", serviceRoleKey: "server-test",
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url.endsWith("/rpc/review_product_recommendation")) {
+        const body = JSON.parse(options.body);
+        return Response.json({ id: body.p_recommendation_id, status: body.p_status });
+      }
+      return Response.json({ id: 9, supplier_product_id: "cj-9", is_active: true });
+    },
+  });
+  const reviewed = await supabase.updateRecommendation("rec-1", "approved", "admin-1", null);
+  assert.equal(reviewed.status, "approved");
+  assert.equal(calls.length, 1, "approval alone does not call the publish RPC");
+  const published = await supabase.publishRecommendation("rec-1", { slug: "cj-bear", price: 49.99, collectionIds: [] });
+  assert.equal(published.id, 9);
+  assert.ok(calls[0].url.endsWith("/rpc/review_product_recommendation"));
+  assert.deepEqual(JSON.parse(calls[0].options.body), { p_recommendation_id: "rec-1", p_status: "approved", p_reviewer_id: "admin-1", p_review_notes: null });
+  assert.ok(calls[1].url.endsWith("/rpc/publish_product_recommendation"));
+  assert.deepEqual(JSON.parse(calls[1].options.body), { p_recommendation_id: "rec-1", p_slug: "cj-bear", p_price: 49.99, p_collection_ids: [] });
+  const rejected = await supabase.updateRecommendation("rec-2", "rejected", "admin-1", "Not suitable");
+  assert.equal(rejected.status, "rejected");
+  assert.deepEqual(JSON.parse(calls[2].options.body), { p_recommendation_id: "rec-2", p_status: "rejected", p_reviewer_id: "admin-1", p_review_notes: "Not suitable" });
+});
+
+test("database migration preserves published products on rejection and safely gates inventory", async () => {
+  const migration = await readFile(new URL("../../supabase/migrations/202611150002_stage2_product_management.sql", import.meta.url), "utf8");
+  assert.match(migration, /select \* into rec from public\.product_recommendations where id = p_recommendation_id for update/i);
+  assert.match(migration, /if rec\.status <> 'approved' then/i);
+  assert.match(migration, /where supplier_product_id = rec\.cj_product_id for update/i);
+  assert.match(migration, /prevent_rejected_recommendation_activation/i);
+  assert.doesNotMatch(migration, /drop trigger\s+if exists/i, "migration must preserve existing trigger objects");
+  assert.match(migration, /create trigger stage2_prevent_rejected_recommendation_activation/i);
+  assert.match(migration, /if tg_op = 'INSERT' then[\s\S]*elsif tg_op = 'UPDATE' then/i, "insert and update trigger behavior must be handled explicitly");
+  assert.match(migration, /old\.is_active is not true and new\.is_active is true/i, "updates are rejected only when activating an inactive product");
+  assert.equal((migration.match(/set search_path = pg_catalog, public, pg_temp/gi) || []).length, 3, "all security-definer functions use a pinned safe search path");
+  assert.match(migration, /unique index if not exists product_recommendations_published_product_uidx/i);
+  const reviewFunction = migration.split("create or replace function public.review_product_recommendation(")[1].split("create or replace function public.publish_product_recommendation(")[0];
+  assert.doesNotMatch(reviewFunction, /update public\.products/i, "rejecting a recommendation must not change its linked product");
+  assert.match(migration, /jsonb_typeof\(rec\.supplier_data->'inventory_verified'\) = 'boolean'[\s\S]*rec\.supplier_data->'inventory_verified' = 'true'::jsonb[\s\S]*else null/i);
+  assert.doesNotMatch(migration, /\(rec\.supplier_data->>'inventory_verified'\)::boolean/i, "malformed supplier values must never be cast to boolean");
+  assert.match(migration, /grant execute on function public\.publish_product_recommendation[\s\S]*to service_role/i);
+});
+
+test("Stage 2 preflight uses only static read-only SQL and handles an absent publication column", async () => {
+  const preflight = await readFile(new URL("../../supabase/preflight_stage2_product_management.sql", import.meta.url), "utf8");
+  const executableText = preflight.replace(/--.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.doesNotMatch(executableText, /\b(?:query_to_xml|xpath|execute|do)\s*\(/i);
+  assert.doesNotMatch(executableText, /(?:^|\n)\s*(?:insert|update|delete|truncate|alter|drop|create|grant|revoke|call|do)\b/i);
+  assert.match(preflight, /pg_catalog\.to_jsonb\(r\)->>'published_product_id'/i);
+  assert.match(preflight, /when not column_exists then 'PASS'/i);
+  assert.match(preflight, /Migration ledger exists and has a version column, but this read-only preflight does not inspect version rows/i);
+  assert.match(preflight, /overall_status/i);
+  const indexCheck = preflight.split("published_index_check as (")[1].split("published_index_checks as (")[0];
+  assert.match(indexCheck, /select c\.oid as object_oid, c\.relkind, c\.indexrelid, c\.indrelid/i);
+  assert.doesNotMatch(indexCheck, /select c\.oid as object_oid, c\.relkind, i\./i, "the outer index CTE must use the exposed c alias");
+  assert.match(preflight, /e\.data_type in \('numeric','decimal'\)[\s\S]*a\.numeric_precision[\s\S]*a\.numeric_scale/i);
+  assert.doesNotMatch(preflight, /or a\.numeric_precision is distinct from e\.numeric_precision\s+or a\.numeric_scale is distinct from e\.numeric_scale/i, "integer precision metadata must not cause a type mismatch");
+  assert.match(preflight, /pg_catalog\.oidvectortypes\(p\.proargtypes\)/i);
+  assert.doesNotMatch(preflight, /p\.proargtypes::oid\[\]\s*=\s*e\.argument_oids/i, "function signatures must not depend on array bounds");
+  for (const diagnosticField of ["expected identity arguments", "existing identity arguments", "existing argument types", "existing return type", "owner=", "security_definer=", "search_path=", "grants="]) {
+    assert.ok(preflight.includes(diagnosticField), `function diagnostics should show ${diagnosticField}`);
+  }
+  assert.match(preflight, /kind=' \|\| prokind::text/i, "catalog internal-char fields must be cast before text concatenation");
+  assert.doesNotMatch(preflight, /\|\|\s*prokind\b(?!\s*::text)/i, "prokind must not be concatenated without an explicit text cast");
 });
 
 test("config accepts Supabase Auth UUIDs and normalizes GitHub Pages origin", () => {
