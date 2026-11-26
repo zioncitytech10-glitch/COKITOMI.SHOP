@@ -418,6 +418,31 @@ const server = createServer(async (req, res) => {
         });
       }
 
+      // Delete one unpublished recommendation record.
+      const deleteRecommendationMatch = url.pathname.match(
+        /^\/api\/admin\/recommendations\/([0-9a-f-]{36})$/i,
+      );
+      if (req.method === "DELETE" && deleteRecommendationMatch) {
+        const id = deleteRecommendationMatch[1];
+        if (!UUID_PATTERN.test(id)) {
+          return send(res, 400, { error: "Invalid recommendation ID" });
+        }
+        const deleted = await supabase.deleteRecommendation(id);
+        return deleted
+          ? send(res, 200, { deleted: true, id: deleted.id })
+          : send(res, 404, { error: "Recommendation not found, or it is already published" });
+      }
+
+      // Bulk cleanup is restricted to rejected and unpublished recommendations.
+      if (req.method === "DELETE" && url.pathname === "/api/admin/recommendations") {
+        const status = url.searchParams.get("status");
+        if (status !== "rejected") {
+          return send(res, 400, { error: "Bulk deletion is only available for rejected recommendations" });
+        }
+        const deleted = await supabase.deleteRejectedRecommendations();
+        return send(res, 200, { deleted: true, count: deleted.length });
+      }
+
       // Match supplier recommendation IDs
       const match = url.pathname.match(
         /^\/api\/admin\/recommendations\/([0-9a-f-]{36})$/i,
