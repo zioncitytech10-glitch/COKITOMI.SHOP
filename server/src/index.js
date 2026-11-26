@@ -205,7 +205,7 @@ const server = createServer(async (req, res) => {
       }
 
       const orderMatch = url.pathname.match(
-        /^\\/api\\/admin\\/orders\\/([^/]+)$/,
+        /^\/api\/admin\/orders\/([^/]+)$/,
       );
       if (req.method === "GET" && orderMatch) {
         const id = orderMatch[1];
@@ -238,7 +238,7 @@ const server = createServer(async (req, res) => {
       }
 
       const customerMatch = url.pathname.match(
-        /^\\/api\\/admin\\/customers\\/([^/]+)$/,
+        /^\/api\/admin\/customers\/([^/]+)$/,
       );
       if (req.method === "GET" && customerMatch) {
         const id = customerMatch[1];
