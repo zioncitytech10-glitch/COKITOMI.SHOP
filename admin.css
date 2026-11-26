@@ -10,3 +10,6 @@
 @media(max-width:700px){.supplier-toolbar{display:grid;grid-template-columns:minmax(0,1fr)}.supplier-toolbar select,.supplier-toolbar .primary-button{width:100%;min-width:0}}
 
 .supplier-cleanup{display:flex;justify-content:flex-end;margin:8px 0 12px}.supplier-cleanup [hidden]{display:none}.danger-button{background:#fff}
+
+/* Restore action and trash view */
+.supplier-toolbar select[aria-label="Recommendation status"]{font-weight:600}
