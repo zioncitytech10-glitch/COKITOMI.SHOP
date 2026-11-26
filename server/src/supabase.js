@@ -229,11 +229,14 @@ export class SupabaseService {
   async listRecommendations(status = "pending", limit = 100) {
     const params = new URLSearchParams({
       select: "*",
-      status: `eq.${status}`,
       order: "commercial_score.desc",
       limit: String(limit),
     });
-
+    if (status === "trash") params.set("deleted_at", "not.is.null");
+    else {
+      params.set("status", `eq.${status}`);
+      params.set("deleted_at", "is.null");
+    }
     return this.#db(`product_recommendations?${params}`);
   }
 
@@ -249,29 +252,47 @@ export class SupabaseService {
     });
   }
 
-  // Delete only unpublished recommendation records. Published products remain linked.
-  async deleteRecommendation(id) {
+  // Move one unpublished recommendation into the recoverable trash.
+  async archiveRecommendation(id) {
     const params = new URLSearchParams({
       id: `eq.${id}`,
       published_product_id: "is.null",
+      deleted_at: "is.null",
       select: "id",
     });
     const rows = await this.#db(`product_recommendations?${params}`, {
-      method: "DELETE",
+      method: "PATCH",
+      body: { deleted_at: new Date().toISOString() },
     });
     return rows[0] || null;
   }
 
-  // Bulk cleanup is deliberately restricted to rejected, unpublished records.
-  async deleteRejectedRecommendations() {
+  // Move all rejected, unpublished recommendations into recoverable trash.
+  async archiveRejectedRecommendations() {
     const params = new URLSearchParams({
       status: "eq.rejected",
       published_product_id: "is.null",
+      deleted_at: "is.null",
       select: "id",
     });
     return this.#db(`product_recommendations?${params}`, {
-      method: "DELETE",
+      method: "PATCH",
+      body: { deleted_at: new Date().toISOString() },
     });
+  }
+
+  async restoreRecommendation(id) {
+    const params = new URLSearchParams({
+      id: `eq.${id}`,
+      deleted_at: "not.is.null",
+      published_product_id: "is.null",
+      select: "id",
+    });
+    const rows = await this.#db(`product_recommendations?${params}`, {
+      method: "PATCH",
+      body: { deleted_at: null },
+    });
+    return rows[0] || null;
   }
 
   async listProducts(limit = 200) {
