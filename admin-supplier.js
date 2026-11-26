@@ -106,17 +106,24 @@ function renderRecommendation(rec, api, refresh) {
     if (cleanDescription) card.append(make("p", "record-meta", cleanDescription.slice(0, 600)));
   }
   const actions = make("div", "admin-record-actions");
-  if (rec.deleted_at) {\n    actions.append(action("Restore", "quiet-button", async () => { await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}/restore`, { method: "POST" }); await refresh(); }));\n  }\n  if (!rec.deleted_at && rec.status === "pending") {
-    actions.append(action("Approve", "quiet-button", async () => { await changeStatus(api, rec.id, "approved"); await refresh(); }));
-    actions.append(action("Reject", "quiet-button danger-button", async () => { await changeStatus(api, rec.id, "rejected"); await refresh(); }));
+  if (rec.deleted_at) {
+    actions.append(action("Restore", "quiet-button", async () => {
+      await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}/restore`, { method: "POST" });
+      await refresh();
+    }));
+  } else {
+    if (rec.status === "pending") {
+      actions.append(action("Approve", "quiet-button", async () => { await changeStatus(api, rec.id, "approved"); await refresh(); }));
+      actions.append(action("Reject", "quiet-button danger-button", async () => { await changeStatus(api, rec.id, "rejected"); await refresh(); }));
+    }
+    if (rec.status === "approved" && !rec.published_product_id) actions.append(makePublishForm(rec, api, refresh));
+    if (!rec.published_product_id) actions.append(action("Move to Trash", "quiet-button danger-button", async () => {
+      if (!window.confirm(`Move "${rec.title}" to Trash? You can restore it later.`)) return;
+      await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}`, { method: "DELETE" });
+      await refresh();
+    }));
+    else actions.append(make("p", "admin-notice", `Published as storefront product ${rec.published_product_id}${rec.published_at ? ` on ${new Date(rec.published_at).toLocaleDateString()}` : ""}. Published records are protected from deletion.`));
   }
-  if (!rec.deleted_at && rec.status === "approved" && !rec.published_product_id) actions.append(makePublishForm(rec, api, refresh));
-  if (rec.published_product_id) actions.append(make("p", "admin-notice", `Published as storefront product ${rec.published_product_id}${rec.published_at ? ` on ${new Date(rec.published_at).toLocaleDateString()}` : ""}. Published records are protected from deletion.`));
-  else actions.append(action("Delete record", "quiet-button danger-button", async () => {
-    if (!window.confirm(`Permanently delete "${rec.title}" from supplier research?`)) return;
-    await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}`, { method: "DELETE" });
-    await refresh();
-  }));
   card.append(actions);
   return card;
 }
