@@ -1,3 +1,45 @@
+
+const ORDER_STATUSES = new Set([
+  "pending",
+  "payment_processing",
+  "paid",
+  "submitted_to_supplier",
+  "processing",
+  "shipped",
+  "delivered",
+  "cancelled",
+  "refunded",
+  "fulfillment_error",
+]);
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function validatePage({ limit, offset }) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new TypeError("limit must be an integer between 1 and 100");
+  }
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new TypeError("offset must be a non-negative integer");
+  }
+}
+
+function validateUuid(id, label) {
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) {
+    throw new TypeError(`Invalid ${label} ID`);
+  }
+}
+
+function cleanSearch(value) {
+  if (value == null || value === "") return "";
+  if (typeof value !== "string") throw new TypeError("search must be a string");
+  return value
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}@+\- ]/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
+}
+
 export class SupabaseService {
   constructor({ url, publishableKey, serviceRoleKey, fetchImpl = fetch }) {
     this.url = url;
@@ -330,4 +372,126 @@ export class SupabaseService {
 
     return Array.isArray(rows) ? rows[0] || null : rows;
   }
+
+  // Read-only administrator order listing. The caller enforces authentication.
+  async listOrders({ limit = 50, offset = 0, status = null, search = null } = {}) {
+    validatePage({ limit, offset });
+    if (status && !ORDER_STATUSES.has(status)) {
+      throw new TypeError("Invalid order status");
+    }
+
+    const params = new URLSearchParams({
+      select: "id,user_id,order_number,email,status,currency,subtotal,shipping_total,tax_total,total,shipping_name,payment_provider,payment_reference,supplier_order_id,tracking_number,tracking_url,created_at,updated_at",
+      order: "created_at.desc,id.desc",
+      limit: String(limit),
+      offset: String(offset),
+    });
+
+    if (status) params.set("status", `eq.${status}`);
+
+    const term = cleanSearch(search);
+    if (term) {
+      params.set("or", `(order_number.ilike.*${term}*,email.ilike.*${term}*)`);
+    }
+
+    return this.#db(`orders?${params}`);
+  }
+
+  // Read one order and its purchased line items.
+  async getOrder(id) {
+    validateUuid(id, "order");
+    const params = new URLSearchParams({
+      select: "*",
+      id: `eq.${id}`,
+      limit: "1",
+    });
+    const rows = await this.#db(`orders?${params}`);
+    if (!rows.length) return null;
+
+    const itemParams = new URLSearchParams({
+      select: "*",
+      order_id: `eq.${id}`,
+      order: "id.asc",
+    });
+    const items = await this.#db(`order_items?${itemParams}`);
+
+    return { ...rows[0], items };
+  }
+
+  // Customer list includes order count and most recent order details for each
+  // customer on the requested page. This is a read-only admin operation.
+  async listCustomers({ limit = 50, offset = 0, search = null } = {}) {
+    validatePage({ limit, offset });
+    const params = new URLSearchParams({
+      select: "id,full_name,phone,created_at,updated_at",
+      order: "created_at.desc,id.desc",
+      limit: String(limit),
+      offset: String(offset),
+    });
+
+    const term = cleanSearch(search);
+    if (term) {
+      params.set("or", `(full_name.ilike.*${term}*,phone.ilike.*${term}*)`);
+    }
+
+    const customers = await this.#db(`customer_profiles?${params}`);
+    if (!customers.length) return [];
+
+    const ids = customers.map((customer) => {
+      validateUuid(customer.id, "customer");
+      return customer.id;
+    });
+
+    const orderParams = new URLSearchParams({
+      select: "user_id,order_number,status,total,created_at,email",
+      user_id: `in.(${ids.join(",")})`,
+      order: "created_at.desc",
+      limit: "10000",
+    });
+    const orders = await this.#db(`orders?${orderParams}`);
+
+    const ordersByCustomer = new Map();
+    for (const order of orders) {
+      if (!ordersByCustomer.has(order.user_id)) ordersByCustomer.set(order.user_id, []);
+      ordersByCustomer.get(order.user_id).push(order);
+    }
+
+    return customers.map((customer) => {
+      const customerOrders = ordersByCustomer.get(customer.id) || [];
+      return {
+        ...customer,
+        email: customerOrders[0]?.email || null,
+        order_count: customerOrders.length,
+        latest_order_at: customerOrders[0]?.created_at || null,
+      };
+    });
+  }
+
+  // Read one customer and the customer's order history.
+  async getCustomer(id) {
+    validateUuid(id, "customer");
+    const params = new URLSearchParams({
+      select: "id,full_name,phone,created_at,updated_at",
+      id: `eq.${id}`,
+      limit: "1",
+    });
+    const rows = await this.#db(`customer_profiles?${params}`);
+    if (!rows.length) return null;
+
+    const orderParams = new URLSearchParams({
+      select: "id,order_number,email,status,currency,total,created_at",
+      user_id: `eq.${id}`,
+      order: "created_at.desc",
+      limit: "1000",
+    });
+    const orders = await this.#db(`orders?${orderParams}`);
+
+    return {
+      ...rows[0],
+      email: orders[0]?.email || null,
+      order_count: orders.length,
+      orders,
+    };
+  }
+
 }
