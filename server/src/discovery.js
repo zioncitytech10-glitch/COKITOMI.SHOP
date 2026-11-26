@@ -58,8 +58,8 @@ export const isTeddyBearCandidate = (title, categoryText = "", description = "")
   const excluded = /\b(jacket|coat|hoodie|shirt|pants|dress|clothing|blanket|pillow|cushion|bag|keychain|phone\s*case|wall\s*art|poster|print|cup|mug|tumbler|glass|bottle|drinkware|lamp|light|curtain|rug|mat|car\s*seat|costume)\b/i;
   if (excluded.test(name + " " + details)) return false;
   const hasBear = /\b(teddy|bear)\b/i.test(name);
-  const toyEvidence = /\b(plush|stuffed|soft\s*toy|soft\s*stuffed|toy|teddy\s*bear|stuffed\s*animal)\b/i.test(name + " " + category);
-  const descriptionEvidence = /\b(plush|stuffed\s*animal|soft\s*toy|teddy\s*bear)\b/i.test(details);
+  const toyEvidence = /\b(plush|stuffed|soft\s*toy|soft\s*stuffed|toy|teddy\s*bear|stuffed\s*animals?)\b/i.test(name + " " + category);
+  const descriptionEvidence = /\b(plush|stuffed\s*animals?|soft\s*toy|teddy\s*bear)\b/i.test(details);
   return hasBear && (toyEvidence || descriptionEvidence);
 };
 export const isRoseBouquetCandidate = (title, categoryText = "") => {
