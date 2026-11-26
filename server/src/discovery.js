@@ -34,6 +34,25 @@ const knownNumber = (...values) => {
   return null;
 };
 const variantId = (variant) => String(first(variant?.vid, variant?.variantId, variant?.id, ""));
+const productTitle = (detail, summary) => first(
+  detail?.nameEn, detail?.productNameEn, detail?.productName, detail?.productNameCn,
+  summary?.nameEn, summary?.productNameEn, summary?.productName, summary?.productNameCn, summary?.name,
+);
+const productCategoryText = (detail, summary) => [
+  detail?.category, detail?.categoryName, detail?.categoryNameEn, detail?.threeCategoryName,
+  detail?.twoCategoryName, detail?.oneCategoryName, detail?.productType,
+  summary?.threeCategoryName, summary?.twoCategoryName, summary?.oneCategoryName,
+  summary?.categoryName, summary?.categoryNameEn, summary?.category,
+  summary?.productType,
+].filter((value) => typeof value === "string").join(" ");
+const isTeddyBearCandidate = (title, categoryText) => {
+  const name = String(title || "").toLowerCase();
+  const category = String(categoryText || "").toLowerCase();
+  // Require the product name itself to identify a teddy/plush/bear item.
+  // Category text can strengthen a bear match, but generic descriptions do not.
+  return /\b(teddy|plush|plushie|stuffed\s+animal)\b/i.test(name)
+    || (/\bbear\b/i.test(name) && /\b(toy|toys|plush|stuffed|doll)\b/i.test(category));
+};
 const withStage = async (stage, operation) => {
   try { return await operation(); }
   catch (error) { error.discoveryStage = stage; throw error; }
@@ -82,6 +101,7 @@ export class ProductDiscovery {
       productFlag,
       page: 1,
       size: Math.min(20, this.config.maxCandidates),
+      features: ["enable_category", "enable_description"],
     } });
     return unwrap(response);
   }
@@ -96,6 +116,7 @@ export class ProductDiscovery {
       productsEvaluated: 0,
       evaluationFailures: 0,
       recommendationsSaved: 0,
+      productsFilteredAsIrrelevant: 0,
       failures: [],
     };
     const recordFailure = (phase, error) => {
@@ -127,8 +148,13 @@ export class ProductDiscovery {
     const recommendations = [];
     for (const summary of candidates) {
       try {
-        recommendations.push(await this.#evaluate(summary));
-        diagnostics.productsEvaluated++;
+        const recommendation = await this.#evaluate(summary);
+        if (recommendation) {
+          recommendations.push(recommendation);
+          diagnostics.productsEvaluated++;
+        } else {
+          diagnostics.productsFilteredAsIrrelevant++;
+        }
       } catch (error) {
         diagnostics.evaluationFailures++;
         recordFailure("product_evaluation", error);
@@ -167,7 +193,23 @@ export class ProductDiscovery {
       this.cj.call("/product/productDetail/query", { method: "POST", body: { id: pid } })
     );
     const detail = detailsResponse.data || {};
-    const variants = Array.isArray(detail.variants) ? detail.variants : [];
+    const titleValue = productTitle(detail, summary);
+    if (!titleValue) {
+      return null;
+    }
+    const categoryText = productCategoryText(detail, summary);
+    if (!isTeddyBearCandidate(titleValue, categoryText)) {
+      return null;
+    }
+    let variants = Array.isArray(detail.variants) ? detail.variants : [];
+    // The product-detail response can omit variants for some products. CJ's
+    // dedicated variant endpoint is the documented fallback for a product ID.
+    if (!variants.length) {
+      const variantResponse = await withStage("variant_lookup", () =>
+        this.cj.call("/product/variant/query", { query: { pid } })
+      );
+      variants = unwrap(variantResponse);
+    }
     const variantRecords = await withStage("variant_processing", () => Promise.all(variants.map(async (entry) => {
       if (!entry || typeof entry !== "object") return {
         id: null, sku: null, name: null, image_url: null, price: null,
@@ -215,7 +257,7 @@ export class ProductDiscovery {
     const ratings = reviewRows.map((r) => num(first(r.score, r.rating, r.star))).filter((x) => x !== null);
     const rating = ratings.length ? ratings.reduce((sum, value) => sum + value, 0) / ratings.length : null;
     const reviewCount = num(reviewResponse?.data?.total) ?? reviewRows.length;
-    const sku = String(first(variant.variantSku, detail.productSku, ""));
+    const sku = String(first(variant.variantSku, variant.sku, detail.productSku, detail.sku, ""));
     const sourceCountry = String(first(detail.sourceCountryCode, detail.countryCode, "CN")).toUpperCase();
     let shipping = null;
     if (sku) {
@@ -238,7 +280,7 @@ export class ProductDiscovery {
         shipping = sorted[0] || null;
       }
     }
-    const rawSupplierPrice = knownNumber(variant.variantSellPrice, variant.variantPrice, detail.sellPrice, detail.productSellPrice, summary.sellPrice);
+    const rawSupplierPrice = knownNumber(variant.variantSellPrice, variant.variantPrice, variant.sellPrice, detail.sellPrice, detail.productSellPrice, summary.sellPrice, summary.nowPrice);
     const supplierPrice = rawSupplierPrice ?? 0;
     const info = {
       supplierPrice,
@@ -253,15 +295,17 @@ export class ProductDiscovery {
       newArrival: summary._productFlag === 1,
     };
     const scored = await withStage("pricing_scoring", async () => scoreCandidate(info, this.config));
-    const title = String(first(detail.productNameEn, summary.productNameEn, summary.productName, "CJ teddy bear"));
+    const title = String(titleValue);
     return {
       cj_product_id: pid,
       cj_variant_id: vid || null,
       title: title.slice(0, 300),
       description: String(first(detail.description, detail.productDescription, "")).slice(0, 5000),
-      image_url: imageUrl(first(detail.bigImage, detail.productImage, detail.productImageUrl, summary.bigImage, summary.productImage, summary.productImageUrl)),
-      gallery: [...new Set((Array.isArray(detail.productImageSet) ? detail.productImageSet : Array.isArray(detail.image) ? detail.image : [])
-        .map(imageUrl).filter((url) => typeof url === "string" && url.trim()).map((url) => url.trim()))].slice(0, 50),
+      image_url: imageUrl(first(detail.bigImg, detail.bigImage, detail.productImage, detail.productImageUrl, summary.bigImage, summary.productImage, summary.productImageUrl)),
+      gallery: [...new Set([
+        ...(Array.isArray(detail.productImageSet) ? detail.productImageSet : []),
+        ...(Array.isArray(detail.image) ? detail.image : typeof detail.img === "string" ? detail.img.split(",") : []),
+      ].map(imageUrl).filter((url) => typeof url === "string" && url.trim()).map((url) => url.trim()))].slice(0, 50),
       variant_data: { sku: sku || null, name: first(variant.variantName, variant.variantKey), options: variant.variantKey || null, variants: variantRecords },
       supplier_data: {
         supplier: "CJdropshipping", country: sourceCountry, warehouse_us_inventory: info.usInventory,
