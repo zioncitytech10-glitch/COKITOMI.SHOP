@@ -237,3 +237,35 @@ test("customer detail rejects malformed IDs before network access", async () => 
   await assert.rejects(service.getCustomer("bad-id"), TypeError);
   assert.equal(calls, 0);
 });
+
+test("customer listing limits concurrent order-summary requests to batches of ten", async () => {
+  const customers = Array.from({ length: 11 }, (_, index) => ({
+    id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    full_name: `Customer ${index + 1}`,
+    phone: null,
+  }));
+  let activeOrderRequests = 0;
+  let maxActiveOrderRequests = 0;
+
+  const service = serviceWith(async (url) => {
+    const parsed = new URL(url);
+    if (parsed.pathname.endsWith("/customer_profiles")) {
+      return Response.json(customers);
+    }
+    if (parsed.pathname.endsWith("/orders")) {
+      activeOrderRequests++;
+      maxActiveOrderRequests = Math.max(maxActiveOrderRequests, activeOrderRequests);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      activeOrderRequests--;
+      return new Response(JSON.stringify([]), {
+        headers: { "Content-Type": "application/json", "Content-Range": "*/0" },
+      });
+    }
+    throw new Error("Unexpected table request");
+  });
+
+  const result = await service.listCustomers({ limit: 20 });
+  assert.equal(result.length, 11);
+  assert.equal(maxActiveOrderRequests, 10);
+  assert.ok(result.every((customer) => customer.order_count === 0));
+});
