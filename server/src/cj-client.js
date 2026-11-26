@@ -66,6 +66,9 @@ export class CjClient {
     try { data = await response.json(); } catch {
       const error = new Error("CJ returned a non-JSON response");
       error.httpStatus = response.status;
+      error.cjEndpoint = path.split("?")[0];
+      const requestId = response.headers?.get("X-Request-Id") || response.headers?.get("X-Request-ID") || response.headers?.get("request-id");
+      error.cjRequestId = typeof requestId === "string" && /^[A-Za-z0-9._:-]{1,120}$/.test(requestId) ? requestId : null;
       error.protocolFailure = true;
       error.rateLimited = response.status === 429;
       error.retryAfterMs = parseRetryAfter(response.headers?.get("Retry-After"), this.nowImpl());
@@ -76,6 +79,16 @@ export class CjClient {
       const err = new Error("CJ provider request failed");
       err.cjCode = Number.isInteger(parsedCode) ? parsedCode : null;
       err.httpStatus = response.status;
+      err.cjEndpoint = path.split("?")[0];
+      const headerRequestId = response.headers?.get("X-Request-Id")
+        || response.headers?.get("X-Request-ID")
+        || response.headers?.get("request-id")
+        || response.headers?.get("traceparent");
+      const bodyRequestId = data?.requestId || data?.requestID || data?.traceId || data?.logId;
+      const requestId = headerRequestId || bodyRequestId;
+      err.cjRequestId = typeof requestId === "string" && /^[A-Za-z0-9._:-]{1,120}$/.test(requestId)
+        ? requestId
+        : null;
       err.rateLimited = response.status === 429 || err.cjCode === 1600200;
       if (err.rateLimited) err.retryAfterMs = parseRetryAfter(response.headers?.get("Retry-After"), this.nowImpl());
       throw err;

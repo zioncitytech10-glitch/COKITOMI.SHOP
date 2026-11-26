@@ -36,7 +36,13 @@ function safeFailure(phase, error) {
     : providerCode === 1601000 || [1600001, 1600002, 1600004, 1600005, 1600006].includes(providerCode) ? "cj_authentication_error"
     : httpStatus && httpStatus >= 400 ? "provider_http_error"
     : "provider_error";
-  return { phase, classification, httpStatus, providerCode };
+  const endpoint = typeof error?.cjEndpoint === "string" && /^\/[A-Za-z0-9/_-]{1,160}$/.test(error.cjEndpoint)
+    ? error.cjEndpoint
+    : null;
+  const requestId = typeof error?.cjRequestId === "string" && /^[A-Za-z0-9._:-]{1,120}$/.test(error.cjRequestId)
+    ? error.cjRequestId
+    : null;
+  return { phase, classification, httpStatus, providerCode, endpoint, requestId };
 }
 
 export class ProductDiscovery {
@@ -98,6 +104,10 @@ export class ProductDiscovery {
       } catch (error) {
         diagnostics.evaluationFailures++;
         recordFailure("product_evaluation", error);
+        const lastFailure = diagnostics.failures[diagnostics.failures.length - 1];
+        if (lastFailure && lastFailure.phase === "product_evaluation") {
+          lastFailure.productId = String(first(summary.pid, summary.productId, summary.id, "")).slice(0, 80) || null;
+        }
       }
     }
     recommendations.sort((a, b) => b.commercial_score - a.commercial_score);
