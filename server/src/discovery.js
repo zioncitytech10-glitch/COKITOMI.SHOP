@@ -61,16 +61,16 @@ export const isTeddyBearCandidate = (title, categoryText = "") => {
 
   // Exclude apparel, home textiles and accessories even when "plush" or "bear"
   // appears in the title or category.
-  const nonToyProduct = /\\b(jacket|coat|parka|hoodie|sweatshirt|sweater|shirt|pants|trousers|dress|skirt|clothing|apparel|slippers|shoes|boots|blanket|pillow|cushion|bedding|bag|backpack|wallet|keychain|phone case|fabric|material)\\b/i;
+  const nonToyProduct = /\b(jacket|coat|parka|hoodie|sweatshirt|sweater|shirt|pants|trousers|dress|skirt|clothing|apparel|slippers|shoes|boots|blanket|pillow|cushion|bedding|bag|backpack|wallet|keychain|phone case|fabric|material)\b/i;
   if (nonToyProduct.test(name)) return false;
 
-  const teddyBear = /\\bteddy\\s+bear\\b/i.test(name);
-  const stuffedBear = /\\b(bear|teddy)\\b/i.test(name)
-    && /\\b(plush|stuffed|soft toy|toy)\\b/i.test(name);
-  const explicitStuffedAnimal = /\\b(stuffed animal|plush toy|plushie|soft toy)\\b/i.test(name)
-    && /\\b(bear|teddy)\\b/i.test(name);
-  const toyCategory = /\\b(toy|toys|doll|stuffed animal|plush toy)\\b/i.test(category);
-  return teddyBear || stuffedBear || explicitStuffedAnimal || (toyCategory && /\\b(bear|teddy)\\b/i.test(name));
+  const teddyBear = /\bteddy\s+bear\b/i.test(name);
+  const stuffedBear = /\b(bear|teddy)\b/i.test(name)
+    && /\b(plush|stuffed|soft toy|toy)\b/i.test(name);
+  const explicitStuffedAnimal = /\b(stuffed animal|plush toy|plushie|soft toy)\b/i.test(name)
+    && /\b(bear|teddy)\b/i.test(name);
+  const toyCategory = /\b(toy|toys|doll|stuffed animal|plush toy)\b/i.test(category);
+  return teddyBear || stuffedBear || explicitStuffedAnimal || (toyCategory && /\b(bear|teddy)\b/i.test(name));
 };
 const withStage = async (stage, operation) => {
   try { return await operation(); }
@@ -167,9 +167,9 @@ export class ProductDiscovery {
     const candidates = [...products.values()]
       .sort((a, b) => {
         const title = (item) => String(first(item.nameEn, item.productNameEn, item.productName, item.name, "")).toLowerCase();
-        const relevance = (item) => /\\bteddy\\s*bear\\b/.test(title(item)) ? 3
-          : /\\b(bear|teddy)\\b/.test(title(item)) && /\\b(plush|stuffed|toy)\\b/.test(title(item)) ? 2
-          : /\\b(bear|teddy)\\b/.test(title(item)) ? 1 : 0;
+        const relevance = (item) => /\bteddy\s*bear\b/.test(title(item)) ? 3
+          : /\b(bear|teddy)\b/.test(title(item)) && /\b(plush|stuffed|toy)\b/.test(title(item)) ? 2
+          : /\b(bear|teddy)\b/.test(title(item)) ? 1 : 0;
         return relevance(b) - relevance(a);
       })
       .slice(0, this.config.maxCandidates * 2);
