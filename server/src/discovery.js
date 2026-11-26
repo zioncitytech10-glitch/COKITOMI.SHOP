@@ -66,7 +66,10 @@ function safeFailure(phase, error) {
   const errorType = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError"].includes(error?.name)
     ? error.name
     : "Error";
-  return { phase, classification, httpStatus, providerCode, endpoint, requestId, stage, errorType };
+  const referenceHint = error?.name === "ReferenceError" && typeof error?.message === "string"
+    ? error.message.match(/^([A-Za-z_$][A-Za-z0-9_$]*) is not defined$/)?.[0] || null
+    : null;
+  return { phase, classification, httpStatus, providerCode, endpoint, requestId, stage, errorType, referenceHint };
 }
 
 export class ProductDiscovery {
