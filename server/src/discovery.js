@@ -1,7 +1,21 @@
 import { scoreCandidate } from "./scoring.js";
 
 const KEYWORDS = ["teddy bear", "plush bear", "giant teddy bear", "rose teddy bear", "teddy bear gift"];
-const unwrap = (r) => Array.isArray(r?.data) ? r.data : Array.isArray(r?.data?.list) ? r.data.list : Array.isArray(r?.data?.content) ? r.data.content : [];
+// CJ Product List V2 nests actual products inside data.content[].productList[].
+const unwrap = (r) => {
+  const data = r?.data;
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.list)) return data.list;
+  if (Array.isArray(data?.content)) {
+    return data.content.flatMap((entry) =>
+      Array.isArray(entry?.productList) ? entry.productList
+        : Array.isArray(entry?.list) ? entry.list
+        : entry && (entry.pid || entry.productId || entry.id) ? [entry]
+        : []
+    );
+  }
+  return [];
+};
 const first = (...values) => values.find((x) => x !== undefined && x !== null && x !== "");
 const num = (x) => Number.isFinite(Number(x)) ? Number(x) : null;
 const agingDays = (x) => {
@@ -84,8 +98,9 @@ export class ProductDiscovery {
           diagnostics.searchesSucceeded++;
           diagnostics.productsReturned += results.length;
           for (const product of results) {
-            const pid = String(first(product.pid, product.productId, product.id, ""));
-            if (pid) products.set(pid, { ...product, _searchedKeyword: keyword, _productFlag: flag });
+            const rawPid = first(product.pid, product.productId, product.id);
+            const pid = rawPid == null ? "" : String(rawPid).trim();
+            if (pid) products.set(pid, { ...product, _cjPid: pid, _searchedKeyword: keyword, _productFlag: flag });
           }
         } catch (error) {
           diagnostics.searchesFailed++;
@@ -106,7 +121,8 @@ export class ProductDiscovery {
         recordFailure("product_evaluation", error);
         const lastFailure = diagnostics.failures[diagnostics.failures.length - 1];
         if (lastFailure && lastFailure.phase === "product_evaluation") {
-          lastFailure.productId = String(first(summary.pid, summary.productId, summary.id, "")).slice(0, 80) || null;
+          const failedProductId = first(summary._cjPid, summary.pid, summary.productId, summary.id);
+          lastFailure.productId = failedProductId == null ? null : String(failedProductId).slice(0, 80);
         }
       }
     }
@@ -127,7 +143,13 @@ export class ProductDiscovery {
   }
 
   async #evaluate(summary) {
-    const pid = String(first(summary.pid, summary.productId, summary.id));
+    const rawPid = first(summary._cjPid, summary.pid, summary.productId, summary.id);
+    if (rawPid == null || !String(rawPid).trim()) {
+      const error = new Error("CJ search result did not contain a product ID");
+      error.cjPhase = "product_identifier";
+      throw error;
+    }
+    const pid = String(rawPid).trim();
     const detailsResponse = await this.cj.call("/product/productDetail/query", { method: "POST", body: { id: pid } });
     const detail = detailsResponse.data || {};
     const variants = Array.isArray(detail.variants) ? detail.variants : [];
