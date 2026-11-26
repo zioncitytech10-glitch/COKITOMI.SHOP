@@ -21,6 +21,24 @@ const knownNumber = (...values) => {
 };
 const variantId = (variant) => String(first(variant.vid, variant.variantId, variant.id, ""));
 
+// Return only allowlisted metadata. Never include CJ response bodies, credentials,
+// product payloads, request headers, or raw provider messages in diagnostics.
+function safeFailure(phase, error) {
+  const httpStatus = Number.isInteger(error?.httpStatus) && error.httpStatus >= 100 && error.httpStatus <= 599 ? error.httpStatus : null;
+  const providerCode = Number.isInteger(error?.cjCode) && error.cjCode >= 0 && error.cjCode <= 9999999999
+    ? error.cjCode
+    : typeof error?.providerCode === "string" && /^[A-Z0-9_-]{1,32}$/.test(error.providerCode) ? error.providerCode : null;
+  const classification = error?.timeoutFailure ? "timeout"
+    : error?.networkFailure ? "network_error"
+    : error?.protocolFailure ? "invalid_provider_response"
+    : httpStatus === 429 || providerCode === 1600200 ? "rate_limited"
+    : phase === "supabase_save" && (providerCode === "42501" || httpStatus === 403) ? "database_permission_denied"
+    : providerCode === 1601000 || [1600001, 1600002, 1600004, 1600005, 1600006].includes(providerCode) ? "cj_authentication_error"
+    : httpStatus && httpStatus >= 400 ? "provider_http_error"
+    : "provider_error";
+  return { phase, classification, httpStatus, providerCode };
+}
+
 export class ProductDiscovery {
   constructor({ cj, config, supabase }) { this.cj = cj; this.config = config; this.supabase = supabase; }
 
@@ -36,24 +54,66 @@ export class ProductDiscovery {
   }
 
   async research({ keywords = KEYWORDS, productFlags = [0, 1] } = {}) {
+    const diagnostics = {
+      searchesAttempted: 0,
+      searchesSucceeded: 0,
+      searchesFailed: 0,
+      productsReturned: 0,
+      uniqueProducts: 0,
+      productsEvaluated: 0,
+      evaluationFailures: 0,
+      recommendationsSaved: 0,
+      failures: [],
+    };
+    const recordFailure = (phase, error) => {
+      if (diagnostics.failures.length < 10) diagnostics.failures.push(safeFailure(phase, error));
+    };
+
     const products = new Map();
     for (const keyword of keywords.slice(0, 8)) {
       for (const flag of productFlags.slice(0, 2)) {
-        const results = await this.search(keyword, flag).catch(() => []);
-        for (const product of results) {
-          const pid = String(first(product.pid, product.productId, product.id, ""));
-          if (pid) products.set(pid, { ...product, _searchedKeyword: keyword, _productFlag: flag });
+        diagnostics.searchesAttempted++;
+        try {
+          const results = await this.search(keyword, flag);
+          diagnostics.searchesSucceeded++;
+          diagnostics.productsReturned += results.length;
+          for (const product of results) {
+            const pid = String(first(product.pid, product.productId, product.id, ""));
+            if (pid) products.set(pid, { ...product, _searchedKeyword: keyword, _productFlag: flag });
+          }
+        } catch (error) {
+          diagnostics.searchesFailed++;
+          recordFailure("cj_search", error);
         }
       }
     }
+
     const candidates = [...products.values()].slice(0, this.config.maxCandidates);
+    diagnostics.uniqueProducts = candidates.length;
     const recommendations = [];
     for (const summary of candidates) {
-      try { recommendations.push(await this.#evaluate(summary)); } catch { /* Skip malformed or unavailable supplier records. */ }
+      try {
+        recommendations.push(await this.#evaluate(summary));
+        diagnostics.productsEvaluated++;
+      } catch (error) {
+        diagnostics.evaluationFailures++;
+        recordFailure("product_evaluation", error);
+      }
     }
     recommendations.sort((a, b) => b.commercial_score - a.commercial_score);
-    if (recommendations.length) await this.supabase.saveRecommendations(recommendations);
-    return { searched: candidates.length, saved: recommendations.length };
+
+    if (recommendations.length) {
+      try {
+        await this.supabase.saveRecommendations(recommendations);
+        diagnostics.recommendationsSaved = recommendations.length;
+      } catch (error) {
+        recordFailure("supabase_save", error);
+        error.discoveryDiagnostics = diagnostics;
+        throw error;
+      }
+    }
+
+    return { searched: candidates.length, saved: diagnostics.recommendationsSaved, diagnostics };
   }
 
   async #evaluate(summary) {
