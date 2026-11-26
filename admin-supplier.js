@@ -102,7 +102,7 @@ function renderRecommendation(rec, api, refresh) {
     card.append(make("p", "record-meta", `Category: ${categoryLabels[rec.research_signals.product_category] || rec.research_signals.product_category || "Unknown"} · Collection: ${seasonLabels[rec.research_signals.seasonal_collection] || rec.research_signals.seasonal_collection || "Unknown"}`));
   }
   if (rec.description) {
-    const cleanDescription = String(rec.description).replace(/<br\s*\\/?\s*>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/\s+/g, " ").trim();
+    const cleanDescription = String(rec.description).replace(/<br[^>]*>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/\s+/g, " ").trim();
     if (cleanDescription) card.append(make("p", "record-meta", cleanDescription.slice(0, 600)));
   }
   const actions = make("div", "admin-record-actions");
