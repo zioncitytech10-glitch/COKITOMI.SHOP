@@ -437,30 +437,34 @@ export class SupabaseService {
     const customers = await this.#db(`customer_profiles?${params}`);
     if (!customers.length) return [];
 
-    const ids = customers.map((customer) => {
-      validateUuid(customer.id, "customer");
-      return customer.id;
-    });
+    customers.forEach((customer) => validateUuid(customer.id, "customer"));
 
-    // Fetch an exact count and the latest order metadata for each customer.
-    // This avoids relying on a large response page that Supabase may cap.
-    const summaries = await Promise.all(customers.map(async (customer) => {
-      const orderParams = new URLSearchParams({
-        select: "user_id,email,created_at",
-        user_id: `eq.${customer.id}`,
-        order: "created_at.desc",
-        limit: "1",
-      });
-      const result = await this.#db(`orders?${orderParams}`, {
-        exactCount: true,
-        range: "0-0",
-      });
-      return {
-        customerId: customer.id,
-        latestOrder: result.data[0] || null,
-        orderCount: result.count,
-      };
-    }));
+    // Fetch exact counts and latest-order metadata in small batches. This
+    // avoids both Supabase response-page caps and bursts of 100 requests.
+    const summaries = [];
+    const batchSize = 10;
+
+    for (let start = 0; start < customers.length; start += batchSize) {
+      const batch = customers.slice(start, start + batchSize);
+      const batchSummaries = await Promise.all(batch.map(async (customer) => {
+        const orderParams = new URLSearchParams({
+          select: "user_id,email,created_at",
+          user_id: `eq.${customer.id}`,
+          order: "created_at.desc",
+          limit: "1",
+        });
+        const result = await this.#db(`orders?${orderParams}`, {
+          exactCount: true,
+          range: "0-0",
+        });
+        return {
+          customerId: customer.id,
+          latestOrder: result.data[0] || null,
+          orderCount: result.count,
+        };
+      }));
+      summaries.push(...batchSummaries);
+    }
     const summaryByCustomer = new Map(
       summaries.map((summary) => [summary.customerId, summary])
     );
