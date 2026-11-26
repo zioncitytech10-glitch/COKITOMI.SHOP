@@ -21,20 +21,20 @@ export async function renderSupplierView(host, api) {
   }
   const search = make("button", "primary-button", "Research Teddy Bears"); search.type = "button";
   const status = document.createElement("select"); status.setAttribute("aria-label", "Recommendation status");
-  for (const item of ["pending", "approved", "rejected"]) { const option = document.createElement("option"); option.value = item; option.textContent = `${item[0].toUpperCase()}${item.slice(1)} recommendations`; status.append(option); }
+  for (const [item, label] of [["pending","Pending recommendations"],["approved","Approved recommendations"],["rejected","Rejected recommendations"],["trash","Trash / Restore"]]) { const option = document.createElement("option"); option.value = item; option.textContent = label; status.append(option); }
   toolbar.append(category, season, search, status); host.append(toolbar);
   category.addEventListener("change", () => { search.textContent = `Research ${category.options[category.selectedIndex].text}`; });
   const notice = make("p", "admin-notice"); notice.setAttribute("role", "status"); host.append(notice);
   const cleanup = make("div", "supplier-cleanup");
-  const clearRejected = make("button", "quiet-button danger-button", "Delete all rejected, unpublished records");
+  const clearRejected = make("button", "quiet-button danger-button", "Move all rejected, unpublished records to Trash");
   clearRejected.type = "button"; clearRejected.hidden = true;
   clearRejected.addEventListener("click", async () => {
-    const confirmed = window.confirm("Permanently delete every rejected, unpublished supplier recommendation? Published products will not be touched. This cannot be undone.");
+    const confirmed = window.confirm("Move every rejected, unpublished supplier recommendation to Trash? You can restore them later. Published products will not be touched.");
     if (!confirmed) return;
     clearRejected.disabled = true;
     try {
       const result = await api("/api/admin/recommendations?status=rejected", { method: "DELETE" });
-      notice.textContent = `Deleted ${result.count} rejected, unpublished recommendation record(s).`;
+      notice.textContent = `Moved ${result.count} rejected, unpublished recommendation record(s) to Trash.`;
       await refresh();
     } catch (error) { notice.textContent = error.message; }
     finally { clearRejected.disabled = false; }
@@ -47,7 +47,7 @@ export async function renderSupplierView(host, api) {
       const result = await api(`/api/admin/recommendations?status=${encodeURIComponent(status.value)}&limit=100`);
       list.replaceChildren();
       clearRejected.hidden = status.value !== "rejected" || !result.recommendations?.length;
-      if (!result.recommendations?.length) list.append(make("p", "muted", `No ${status.value} recommendations.`));
+      if (!result.recommendations?.length) list.append(make("p", "muted", status.value === "trash" ? "Trash is empty. Archived records will appear here and can be restored." : `No ${status.value} recommendations.`));
       for (const recommendation of result.recommendations || []) list.append(renderRecommendation(recommendation, api, refresh));
     } catch (error) { list.replaceChildren(make("p", "admin-notice", error.message)); }
   };
@@ -106,11 +106,11 @@ function renderRecommendation(rec, api, refresh) {
     if (cleanDescription) card.append(make("p", "record-meta", cleanDescription.slice(0, 600)));
   }
   const actions = make("div", "admin-record-actions");
-  if (rec.status === "pending") {
+  if (rec.deleted_at) {\n    actions.append(action("Restore", "quiet-button", async () => { await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}/restore`, { method: "POST" }); await refresh(); }));\n  }\n  if (!rec.deleted_at && rec.status === "pending") {
     actions.append(action("Approve", "quiet-button", async () => { await changeStatus(api, rec.id, "approved"); await refresh(); }));
     actions.append(action("Reject", "quiet-button danger-button", async () => { await changeStatus(api, rec.id, "rejected"); await refresh(); }));
   }
-  if (rec.status === "approved" && !rec.published_product_id) actions.append(makePublishForm(rec, api, refresh));
+  if (!rec.deleted_at && rec.status === "approved" && !rec.published_product_id) actions.append(makePublishForm(rec, api, refresh));
   if (rec.published_product_id) actions.append(make("p", "admin-notice", `Published as storefront product ${rec.published_product_id}${rec.published_at ? ` on ${new Date(rec.published_at).toLocaleDateString()}` : ""}. Published records are protected from deletion.`));
   else actions.append(action("Delete record", "quiet-button danger-button", async () => {
     if (!window.confirm(`Permanently delete "${rec.title}" from supplier research?`)) return;
