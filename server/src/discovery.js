@@ -53,7 +53,7 @@ const productCategoryText = (detail, summary) => [
 export const isTeddyBearCandidate = (title, categoryText = "") => {
   const name = String(title || "").toLowerCase();
   const category = String(categoryText || "").toLowerCase();
-  const excluded = /\b(jacket|coat|hoodie|shirt|pants|dress|clothing|blanket|pillow|cushion|bag|keychain|phone case)\b/i;
+  const excluded = /\b(jacket|coat|hoodie|shirt|pants|dress|clothing|blanket|pillow|cushion|bag|keychain|phone case|wall art|poster|print)\b/i;
   if (excluded.test(name)) return false;
   return /\bteddy\s*bear\b/i.test(name)
     || (/\b(bear|teddy)\b/i.test(name) && /\b(plush|stuffed|toy)\b/i.test(name));
@@ -68,7 +68,9 @@ export const isRoseBouquetCandidate = (title, categoryText = "") => {
 };
 export const isRomanticGiftCandidate = (title) => {
   const name = String(title || "").toLowerCase();
-  if (/\b(teddy|bear|rose|roses)\b/i.test(name)) return true;
+  if (/\b(clothing|jacket|coat|shirt|dress|blanket|pillow|wall art|poster|phone case|sticker|keychain)\b/i.test(name)) return false;
+  if (/\b(teddy|bear)\b/i.test(name) && /\b(rose|roses|gift|plush|stuffed|toy|bouquet)\b/i.test(name)) return true;
+  if (/\b(rose|roses)\b/i.test(name) && /\b(gift|bouquet|box|preserved|eternal)\b/i.test(name)) return true;
   return /\b(couple bracelet|matching bracelet|romantic gift box|personalised gift|personalized gift|heart shaped plush)\b/i.test(name);
 };
 const withStage = async (stage, operation) => {
