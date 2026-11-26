@@ -147,6 +147,7 @@ export class ProductDiscovery {
       evaluationFailures: 0,
       recommendationsSaved: 0,
       productsFilteredAsIrrelevant: 0,
+      productChecks: [],
       failures: [],
     };
     const recordFailure = (phase, error) => {
@@ -193,11 +194,19 @@ export class ProductDiscovery {
     for (const summary of candidates) {
       try {
         const recommendation = await this.#evaluate(summary, { isRelevant, category, season });
-        if (recommendation) {
+        if (recommendation?._filtered) {
+          diagnostics.productsFilteredAsIrrelevant++;
+          if (diagnostics.productChecks.length < 30) diagnostics.productChecks.push(recommendation.check);
+        } else if (recommendation) {
           recommendations.push(recommendation);
           diagnostics.productsEvaluated++;
-        } else {
-          diagnostics.productsFilteredAsIrrelevant++;
+          if (diagnostics.productChecks.length < 30) diagnostics.productChecks.push({
+            productId: recommendation.cj_product_id,
+            title: recommendation.title,
+            category: category,
+            passed: true,
+            reason: "Passed category relevance filter",
+          });
         }
       } catch (error) {
         diagnostics.evaluationFailures++;
@@ -238,12 +247,45 @@ export class ProductDiscovery {
     );
     const detail = detailsResponse.data || {};
     const titleValue = productTitle(detail, summary);
-    if (!titleValue) {
-      return null;
-    }
     const categoryText = productCategoryText(detail, summary);
-    if (!isRelevant(titleValue, categoryText, first(detail.description, detail.productDescription, ""))) {
-      return null;
+    const descriptionValue = String(first(detail.description, detail.productDescription, detail.productDesc, ""));
+    const cleanText = (value, limit = 500) => String(value || "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/\\s+/g, " ")
+      .trim()
+      .slice(0, limit);
+    if (!titleValue) {
+      return {
+        _filtered: true,
+        check: {
+          productId: pid,
+          title: null,
+          category: cleanText(categoryText, 300),
+          description: cleanText(descriptionValue),
+          searchedKeyword: summary._searchedKeyword || null,
+          passed: false,
+          reason: "CJ product detail did not provide a usable product title",
+        },
+      };
+    }
+    const passedRelevance = isRelevant(titleValue, categoryText, descriptionValue);
+    if (!passedRelevance) {
+      return {
+        _filtered: true,
+        check: {
+          productId: pid,
+          title: cleanText(titleValue, 300),
+          category: cleanText(categoryText, 300),
+          description: cleanText(descriptionValue),
+          searchedKeyword: summary._searchedKeyword || null,
+          passed: false,
+          reason: "Product title/category/description did not satisfy the teddy-bear relevance rules",
+        },
+      };
     }
     let variants = Array.isArray(detail.variants) ? detail.variants : [];
     // The product-detail response can omit variants for some products. CJ's
