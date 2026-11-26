@@ -199,20 +199,27 @@ export class ProductDiscovery {
         diagnostics.categoryDiscovery.matchedCategories = categories;
         if (!categories.length) recordFailure("category_discovery", Object.assign(new Error("No CJ plush, stuffed-toy or doll categories matched the safe category rules"), { protocolFailure: true }));
         for (const categoryInfo of categories) {
-          diagnostics.searchesAttempted++;
-          diagnostics.categoryDiscovery.categorySearches++;
-          try {
-            const results = await this.search({ categoryId: categoryInfo.id });
-            diagnostics.searchesSucceeded++;
-            diagnostics.productsReturned += results.length;
-            for (const product of results) {
-              const rawPid = first(product.pid, product.productId, product.id);
-              const pid = rawPid == null ? "" : String(rawPid).trim();
-              if (pid) products.set(pid, { ...product, _cjPid: pid, _searchedKeyword: "CJ category: " + categoryInfo.path, _categoryPath: categoryInfo.path });
+          // First scan the category, then refine within it using specific teddy-bear terms.
+          const categoryQueries = [
+            { categoryId: categoryInfo.id, label: "CJ category: " + categoryInfo.path },
+            ...selectedKeywords.slice(0, 8).map((keyword) => ({ categoryId: categoryInfo.id, keyword, label: keyword + " in " + categoryInfo.path })),
+          ];
+          for (const searchQuery of categoryQueries) {
+            diagnostics.searchesAttempted++;
+            diagnostics.categoryDiscovery.categorySearches++;
+            try {
+              const results = await this.search({ categoryId: searchQuery.categoryId, keyword: searchQuery.keyword });
+              diagnostics.searchesSucceeded++;
+              diagnostics.productsReturned += results.length;
+              for (const product of results) {
+                const rawPid = first(product.pid, product.productId, product.id);
+                const pid = rawPid == null ? "" : String(rawPid).trim();
+                if (pid) products.set(pid, { ...product, _cjPid: pid, _searchedKeyword: searchQuery.label, _categoryPath: categoryInfo.path });
+              }
+            } catch (error) {
+              diagnostics.searchesFailed++;
+              recordFailure("cj_category_search", error);
             }
-          } catch (error) {
-            diagnostics.searchesFailed++;
-            recordFailure("cj_category_search", error);
           }
         }
       } catch (error) {
