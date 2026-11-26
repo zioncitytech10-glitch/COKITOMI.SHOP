@@ -33,7 +33,11 @@ const knownNumber = (...values) => {
   }
   return null;
 };
-const variantId = (variant) => String(first(variant.vid, variant.variantId, variant.id, ""));
+const variantId = (variant) => String(first(variant?.vid, variant?.variantId, variant?.id, ""));
+const withStage = async (stage, operation) => {
+  try { return await operation(); }
+  catch (error) { error.discoveryStage = stage; throw error; }
+};
 
 // Return only allowlisted metadata. Never include CJ response bodies, credentials,
 // product payloads, request headers, or raw provider messages in diagnostics.
@@ -56,7 +60,13 @@ function safeFailure(phase, error) {
   const requestId = typeof error?.cjRequestId === "string" && /^[A-Za-z0-9._:-]{1,120}$/.test(error.cjRequestId)
     ? error.cjRequestId
     : null;
-  return { phase, classification, httpStatus, providerCode, endpoint, requestId };
+  const stage = typeof error?.discoveryStage === "string" && /^[a-z_]{1,40}$/.test(error.discoveryStage)
+    ? error.discoveryStage
+    : null;
+  const errorType = ["Error", "TypeError", "RangeError", "ReferenceError", "SyntaxError"].includes(error?.name)
+    ? error.name
+    : "Error";
+  return { phase, classification, httpStatus, providerCode, endpoint, requestId, stage, errorType };
 }
 
 export class ProductDiscovery {
@@ -150,10 +160,17 @@ export class ProductDiscovery {
       throw error;
     }
     const pid = String(rawPid).trim();
-    const detailsResponse = await this.cj.call("/product/productDetail/query", { method: "POST", body: { id: pid } });
+    const detailsResponse = await withStage("product_detail", () =>
+      this.cj.call("/product/productDetail/query", { method: "POST", body: { id: pid } })
+    );
     const detail = detailsResponse.data || {};
     const variants = Array.isArray(detail.variants) ? detail.variants : [];
-    const variantRecords = await Promise.all(variants.map(async (entry) => {
+    const variantRecords = await withStage("variant_processing", () => Promise.all(variants.map(async (entry) => {
+      if (!entry || typeof entry !== "object") return {
+        id: null, sku: null, name: null, image_url: null, price: null,
+        stock: null, stock_verified: false, us_stock: null,
+        us_stock_verified: false, warehouses: [], options: null,
+      };
       const vid = variantId(entry);
       let stock = knownNumber(entry.variantInventory, entry.inventory, entry.stock);
       let usStock = knownNumber(entry.usInventory, entry.USInventory);
@@ -184,8 +201,8 @@ export class ProductDiscovery {
         warehouses: warehouseStock,
         options: first(entry.variantKey, entry.variantProperty, entry.property) || null,
       };
-    }));
-    const variant = variants.find((entry) => knownNumber(entry.variantInventory, entry.inventory, entry.stock) > 0) || variants[0] || {};
+    })));
+    const variant = variants.find((entry) => entry && knownNumber(entry.variantInventory, entry.inventory, entry.stock) > 0) || variants.find((entry) => entry && typeof entry === "object") || {};
     const vid = variantId(variant);
     const selected = variantRecords.find((entry) => entry.id === vid) || variantRecords[0] || null;
     const stock = selected?.stock ?? null;
@@ -232,7 +249,7 @@ export class ProductDiscovery {
       trending: summary._productFlag === 0,
       newArrival: summary._productFlag === 1,
     };
-    const scored = scoreCandidate(info, this.config);
+    const scored = await withStage("pricing_scoring", async () => scoreCandidate(info, this.config));
     const title = String(first(detail.productNameEn, summary.productNameEn, summary.productName, "CJ teddy bear"));
     return {
       cj_product_id: pid,
