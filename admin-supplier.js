@@ -39,7 +39,19 @@ export async function renderSupplierView(host, api) {
     } catch (error) { notice.textContent = error.message; }
     finally { clearRejected.disabled = false; }
   });
-  cleanup.append(clearRejected); host.append(cleanup);
+  const emptyTrash = make("button", "quiet-button danger-button", "Permanently delete everything in Trash");
+  emptyTrash.type = "button"; emptyTrash.hidden = true;
+  emptyTrash.addEventListener("click", async () => {
+    if (!window.confirm("PERMANENTLY DELETE every recommendation in Trash? This cannot be undone. Published products are protected.")) return;
+    emptyTrash.disabled = true;
+    try {
+      const result = await api("/api/admin/recommendations?status=trash&permanent=true", { method: "DELETE" });
+      notice.textContent = `Permanently deleted ${result.count} trashed recommendation record(s).`;
+      await refresh();
+    } catch (error) { notice.textContent = error.message; }
+    finally { emptyTrash.disabled = false; }
+  });
+  cleanup.append(clearRejected, emptyTrash); host.append(cleanup);
   const list = make("div", "admin-product-list"); host.append(list);
   const refresh = async () => {
     list.replaceChildren(make("p", "muted", "Loading recommendations…"));
@@ -47,6 +59,7 @@ export async function renderSupplierView(host, api) {
       const result = await api(`/api/admin/recommendations?status=${encodeURIComponent(status.value)}&limit=100`);
       list.replaceChildren();
       clearRejected.hidden = status.value !== "rejected" || !result.recommendations?.length;
+      emptyTrash.hidden = status.value !== "trash" || !result.recommendations?.length;
       if (!result.recommendations?.length) list.append(make("p", "muted", status.value === "trash" ? "Trash is empty. Archived records will appear here and can be restored." : `No ${status.value} recommendations.`));
       for (const recommendation of result.recommendations || []) list.append(renderRecommendation(recommendation, api, refresh));
     } catch (error) { list.replaceChildren(make("p", "admin-notice", error.message)); }
@@ -111,7 +124,19 @@ function renderRecommendation(rec, api, refresh) {
       await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}/restore`, { method: "POST" });
       await refresh();
     }));
+    actions.append(action("Permanently Delete", "quiet-button danger-button", async () => {
+      if (!window.confirm(`Permanently delete "${rec.title}"? This cannot be undone.`)) return;
+      await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}?permanent=true`, { method: "DELETE" });
+      await refresh();
+    }));
   } else {
+    if (rec.status === "rejected" && !rec.published_product_id) {
+      actions.append(action("Move to Pending", "quiet-button", async () => {
+        if (!window.confirm(`Move "${rec.title}" back to Pending for a fresh review? It will not be published automatically.`)) return;
+        await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}/requeue`, { method: "POST" });
+        await refresh();
+      }));
+    }
     if (rec.status === "pending") {
       actions.append(action("Approve", "quiet-button", async () => { await changeStatus(api, rec.id, "approved"); await refresh(); }));
       actions.append(action("Reject", "quiet-button danger-button", async () => { await changeStatus(api, rec.id, "rejected"); await refresh(); }));
