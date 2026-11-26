@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isTeddyBearCandidate, isRoseBouquetCandidate, isRomanticGiftCandidate } from "../src/discovery.js";
+import { findTeddyBearCategories, isTeddyBearCandidate, isRoseBouquetCandidate, isRomanticGiftCandidate } from "../src/discovery.js";
 
 test("teddy bear category accepts teddy bear toys and rejects unrelated products", () => {
   assert.equal(isTeddyBearCandidate("Giant Teddy Bear Plush Toy"), true);
@@ -29,4 +29,49 @@ test("romantic gift category accepts selected gift types only", () => {
   assert.equal(isRomanticGiftCandidate("Matching Couple Bracelet Set"), true);
   assert.equal(isRomanticGiftCandidate("Personalized Romantic Gift Box"), true);
   assert.equal(isRomanticGiftCandidate("Women's Winter Jacket"), false);
+});
+
+test("CJ category discovery selects plush and stuffed-toy categories but excludes pet categories", () => {
+  const response = {
+    data: [
+      {
+        categoryFirstName: "Toys, Kids & Baby",
+        categoryFirstList: [
+          {
+            categorySecondName: "Dolls & Stuffed Toys",
+            categorySecondList: [
+              { categoryId: "plush-1", categoryName: "Plush & Stuffed Animals" },
+              { categoryId: "dolls-2", categoryName: "Dolls" },
+            ],
+          },
+        ],
+      },
+      {
+        categoryFirstName: "Pet Supplies",
+        categoryFirstList: [
+          {
+            categorySecondName: "Pet Toys",
+            categorySecondList: [
+              { categoryId: "pet-1", categoryName: "Plush Pet Toys" },
+            ],
+          },
+        ],
+      },
+      {
+        categoryFirstName: "Home & Garden",
+        categoryFirstList: [
+          {
+            categorySecondName: "Furniture",
+            categorySecondList: [
+              { categoryId: "home-1", categoryName: "Plush Cushions" },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  const matches = findTeddyBearCategories(response);
+  assert.deepEqual(matches.map((item) => item.id), ["plush-1", "dolls-2"]);
+  assert.match(matches[0].path, /Toys, Kids & Baby > Dolls & Stuffed Toys > Plush & Stuffed Animals/);
 });

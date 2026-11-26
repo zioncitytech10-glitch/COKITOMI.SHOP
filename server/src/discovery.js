@@ -22,6 +22,35 @@ const unwrap = (r) => {
   return [];
 };
 const first = (...values) => values.find((x) => x !== undefined && x !== null && x !== "");
+export function findTeddyBearCategories(categoryResponse) {
+  const found = new Map();
+  const visit = (value, path = [], seen = new Set()) => {
+    if (!value || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, path, seen);
+      return;
+    }
+    const firstName = first(value.categoryFirstName, value.categoryFirstNameEn);
+    const secondName = first(value.categorySecondName, value.categorySecondNameEn);
+    const ownName = first(value.categoryName, value.categoryNameEn, value.nameEn, value.name);
+    const nextPath = [...path, ...[firstName, secondName, ownName].filter((name) => typeof name === "string" && name.trim())];
+    const id = first(value.categoryId, value.categoryID);
+    if (id && ownName) {
+      const normalizedPath = [...new Set(nextPath)].join(" > ");
+      const text = normalizedPath.toLowerCase();
+      const relevant = /plush|stuffed|doll|teddy|soft toy/i.test(text);
+      const petCategory = /pet supplies|pet toys|dog toys|cat toys|pet bedding/i.test(text);
+      if (relevant && !petCategory) found.set(String(id), { id: String(id), name: String(ownName), path: normalizedPath });
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (key.toLowerCase().includes("list") || key.toLowerCase() === "children" || Array.isArray(child)) visit(child, nextPath, seen);
+    }
+  };
+  visit(categoryResponse?.data ?? categoryResponse);
+  return [...found.values()].slice(0, 12);
+}
+
 const num = (x) => Number.isFinite(Number(x)) ? Number(x) : null;
 const agingDays = (x) => {
   if (x == null) return null;
@@ -116,17 +145,19 @@ function safeFailure(phase, error) {
 }
 
 export class ProductDiscovery {
-  constructor({ cj, config, supabase }) { this.cj = cj; this.config = config; this.supabase = supabase; }
+  constructor({ cj, config, supabase }) { this.cj = cj; this.config = config; this.supabase = supabase; this.categoryCache = null; }
 
-  async search(keyword, productFlag) {
-    const response = await this.cj.call("/product/listV2", { query: {
-      keyWord: keyword,
+  async search({ keyword, productFlag, categoryId } = {}) {
+    const query = {
+      ...(keyword ? { keyWord: keyword } : {}),
+      ...(categoryId ? { categoryId } : {}),
       countryCode: "US",
-      productFlag,
+      ...(productFlag === undefined ? {} : { productFlag }),
       page: 1,
-      size: Math.min(20, this.config.maxCandidates),
+      size: Math.min(50, Math.max(1, this.config.maxCandidates)),
       features: ["enable_category", "enable_description"],
-    } });
+    };
+    const response = await this.cj.call("/product/listV2", { query });
     return unwrap(response);
   }
 
@@ -148,6 +179,7 @@ export class ProductDiscovery {
       recommendationsSaved: 0,
       productsFilteredAsIrrelevant: 0,
       productChecks: [],
+      categoryDiscovery: { attempted: false, succeeded: false, matchedCategories: [], categorySearches: 0 },
       failures: [],
     };
     const recordFailure = (phase, error) => {
@@ -155,21 +187,55 @@ export class ProductDiscovery {
     };
 
     const products = new Map();
-    for (const keyword of selectedKeywords.slice(0, 8)) {
-      for (const flag of productFlags.slice(0, 2)) {
-        diagnostics.searchesAttempted++;
-        try {
-          const results = await this.search(keyword, flag);
-          diagnostics.searchesSucceeded++;
-          diagnostics.productsReturned += results.length;
-          for (const product of results) {
-            const rawPid = first(product.pid, product.productId, product.id);
-            const pid = rawPid == null ? "" : String(rawPid).trim();
-            if (pid) products.set(pid, { ...product, _cjPid: pid, _searchedKeyword: keyword, _productFlag: flag });
+    if (category === "teddy_bears") {
+      diagnostics.categoryDiscovery.attempted = true;
+      try {
+        const categoryResponse = this.categoryCache && Date.now() < this.categoryCache.expiresAt
+          ? this.categoryCache.response
+          : await this.cj.call("/product/getCategory");
+        this.categoryCache = { response: categoryResponse, expiresAt: Date.now() + 6 * 60 * 60 * 1000 };
+        const categories = findTeddyBearCategories(categoryResponse);
+        diagnostics.categoryDiscovery.succeeded = true;
+        diagnostics.categoryDiscovery.matchedCategories = categories;
+        if (!categories.length) recordFailure("category_discovery", Object.assign(new Error("No CJ plush, stuffed-toy or doll categories matched the safe category rules"), { protocolFailure: true }));
+        for (const categoryInfo of categories) {
+          diagnostics.searchesAttempted++;
+          diagnostics.categoryDiscovery.categorySearches++;
+          try {
+            const results = await this.search({ categoryId: categoryInfo.id });
+            diagnostics.searchesSucceeded++;
+            diagnostics.productsReturned += results.length;
+            for (const product of results) {
+              const rawPid = first(product.pid, product.productId, product.id);
+              const pid = rawPid == null ? "" : String(rawPid).trim();
+              if (pid) products.set(pid, { ...product, _cjPid: pid, _searchedKeyword: "CJ category: " + categoryInfo.path, _categoryPath: categoryInfo.path });
+            }
+          } catch (error) {
+            diagnostics.searchesFailed++;
+            recordFailure("cj_category_search", error);
           }
-        } catch (error) {
-          diagnostics.searchesFailed++;
-          recordFailure("cj_search", error);
+        }
+      } catch (error) {
+        diagnostics.searchesFailed++;
+        recordFailure("cj_category_discovery", error);
+      }
+    } else {
+      for (const keyword of selectedKeywords.slice(0, 8)) {
+        for (const flag of productFlags.slice(0, 2)) {
+          diagnostics.searchesAttempted++;
+          try {
+            const results = await this.search({ keyword, productFlag: flag });
+            diagnostics.searchesSucceeded++;
+            diagnostics.productsReturned += results.length;
+            for (const product of results) {
+              const rawPid = first(product.pid, product.productId, product.id);
+              const pid = rawPid == null ? "" : String(rawPid).trim();
+              if (pid) products.set(pid, { ...product, _cjPid: pid, _searchedKeyword: keyword, _productFlag: flag });
+            }
+          } catch (error) {
+            diagnostics.searchesFailed++;
+            recordFailure("cj_search", error);
+          }
         }
       }
     }
