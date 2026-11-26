@@ -9,12 +9,21 @@ const money = (input) => input !== null && input !== undefined && input !== "" &
 const slugify = (text) => String(text).normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 125);
 
 export async function renderSupplierView(host, api) {
-  host.replaceChildren(make("h2", "section-title", "CJ Supplier research"), make("p", "section-copy", "Research teddy bear candidates for US customers. Research stays private until you approve it and explicitly publish it."));
+  host.replaceChildren(make("h2", "section-title", "CJ Gift & Romance research"), make("p", "section-copy", "Research only teddy bears, rose bouquets and selected romantic gifts. Results stay private until you approve and explicitly publish them."));
   const toolbar = make("div", "supplier-toolbar");
-  const search = make("button", "primary-button", "Research teddy bears"); search.type = "button";
+  const category = document.createElement("select"); category.setAttribute("aria-label", "Product research category");
+  for (const [key, label] of [["teddy_bears", "Teddy Bears"], ["rose_bouquets", "Roses & Flower Bouquets"], ["romantic_gifts", "Romantic Gifts & Gift Bundles"]]) {
+    const option = document.createElement("option"); option.value = key; option.textContent = label; category.append(option);
+  }
+  const season = document.createElement("select"); season.setAttribute("aria-label", "Seasonal collection");
+  for (const [key, label] of [["year_round", "Year-round"], ["christmas_2026", "Christmas 2026"], ["new_year_2027", "New Year 2027"], ["valentines_2027", "Valentine's Day 2027"]]) {
+    const option = document.createElement("option"); option.value = key; option.textContent = label; season.append(option);
+  }
+  const search = make("button", "primary-button", "Research Teddy Bears"); search.type = "button";
   const status = document.createElement("select"); status.setAttribute("aria-label", "Recommendation status");
   for (const item of ["pending", "approved", "rejected"]) { const option = document.createElement("option"); option.value = item; option.textContent = `${item[0].toUpperCase()}${item.slice(1)} recommendations`; status.append(option); }
-  toolbar.append(search, status); host.append(toolbar);
+  toolbar.append(category, season, search, status); host.append(toolbar);
+  category.addEventListener("change", () => { search.textContent = `Research ${category.options[category.selectedIndex].text}`; });
   const notice = make("p", "admin-notice"); notice.setAttribute("role", "status"); host.append(notice);
   const list = make("div", "admin-product-list"); host.append(list);
   const refresh = async () => {
@@ -30,12 +39,12 @@ export async function renderSupplierView(host, api) {
   search.addEventListener("click", async () => {
     search.disabled = true; notice.textContent = "Searching CJ and gathering available product, variant, stock, review and US shipping data…";
     try {
-      const result = await api("/api/admin/cj/research", { method: "POST", body: JSON.stringify({ keywords: ["teddy bear", "plush bear", "giant teddy bear", "rose teddy bear", "teddy bear gift"], productFlags: [0, 1] }) });
+      const result = await api("/api/admin/cj/research", { method: "POST", body: JSON.stringify({ category: category.value, season: season.value, productFlags: [0, 1] }) });
       status.value = "pending"; const d = result.diagnostics || {};
       const failureSummary = Array.isArray(d.failures) && d.failures.length
         ? " Diagnostics: " + d.failures.map((item) => `${item.phase}: ${item.classification}${item.providerCode ? ` (code ${item.providerCode})` : ""}${item.endpoint ? ` at ${item.endpoint}` : ""}${item.productId ? ` for product ${item.productId}` : ""}${item.requestId ? ` [CJ request ${item.requestId}]` : ""}${item.stage ? ` [stage ${item.stage}]` : ""}${item.errorType ? ` [${item.errorType}]` : ""}${item.referenceHint ? ` [${item.referenceHint}]` : ""}`).join("; ")
         : "";
-      notice.textContent = `Research complete. ${result.saved ?? 0} recommendation record${result.saved === 1 ? "" : "s"} saved. Searches: ${d.searchesSucceeded ?? 0}/${d.searchesAttempted ?? 0} successful; CJ products: ${d.productsReturned ?? 0}; unique: ${d.uniqueProducts ?? 0}; evaluated: ${d.productsEvaluated ?? 0}; evaluation failures: ${d.evaluationFailures ?? 0}.${failureSummary}`;
+      notice.textContent = `Research complete for ${category.options[category.selectedIndex].text} · ${season.options[season.selectedIndex].text}. ${result.saved ?? 0} recommendation record${result.saved === 1 ? "" : "s"} saved. Searches: ${d.searchesSucceeded ?? 0}/${d.searchesAttempted ?? 0} successful; CJ products: ${d.productsReturned ?? 0}; unique: ${d.uniqueProducts ?? 0}; evaluated: ${d.productsEvaluated ?? 0}; evaluation failures: ${d.evaluationFailures ?? 0}.${failureSummary}`;
       await refresh();
     } catch (error) { notice.textContent = error.message; }
     finally { search.disabled = false; }
