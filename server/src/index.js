@@ -1,4 +1,4 @@
-```javascript
+
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "./config.js";
@@ -441,4 +441,3 @@ for (const signal of ["SIGTERM", "SIGINT"]) {
     server.close(() => process.exit(0)),
   );
 }
-```
