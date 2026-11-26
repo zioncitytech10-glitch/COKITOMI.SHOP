@@ -70,7 +70,7 @@ export class SupabaseService {
       : null;
   }
 
-  async #db(path, { method = "GET", body, query = "", exactCount = false } = {}) {
+  async #db(path, { method = "GET", body, query = "", exactCount = false, range = "0-0" } = {}) {
     const isModernApiKey =
       this.serviceRoleKey.startsWith("sb_secret_") ||
       this.serviceRoleKey.startsWith("sb_publishable_");
@@ -93,7 +93,7 @@ export class SupabaseService {
               : method === "POST" && path.startsWith("product_recommendations")
                 ? "resolution=merge-duplicates,return=representation"
                 : "return=representation",
-            ...(exactCount ? { Range: "0-0" } : {}),
+            ...(exactCount ? { Range: range } : {}),
           },
           ...(body ? { body: JSON.stringify(body) } : {}),
           signal: AbortSignal.timeout(20000),
@@ -442,27 +442,36 @@ export class SupabaseService {
       return customer.id;
     });
 
-    const orderParams = new URLSearchParams({
-      select: "user_id,order_number,status,total,created_at,email",
-      user_id: `in.(${ids.join(",")})`,
-      order: "created_at.desc",
-      limit: "10000",
-    });
-    const orders = await this.#db(`orders?${orderParams}`);
-
-    const ordersByCustomer = new Map();
-    for (const order of orders) {
-      if (!ordersByCustomer.has(order.user_id)) ordersByCustomer.set(order.user_id, []);
-      ordersByCustomer.get(order.user_id).push(order);
-    }
+    // Fetch an exact count and the latest order metadata for each customer.
+    // This avoids relying on a large response page that Supabase may cap.
+    const summaries = await Promise.all(customers.map(async (customer) => {
+      const orderParams = new URLSearchParams({
+        select: "user_id,email,created_at",
+        user_id: `eq.${customer.id}`,
+        order: "created_at.desc",
+        limit: "1",
+      });
+      const result = await this.#db(`orders?${orderParams}`, {
+        exactCount: true,
+        range: "0-0",
+      });
+      return {
+        customerId: customer.id,
+        latestOrder: result.data[0] || null,
+        orderCount: result.count,
+      };
+    }));
+    const summaryByCustomer = new Map(
+      summaries.map((summary) => [summary.customerId, summary])
+    );
 
     return customers.map((customer) => {
-      const customerOrders = ordersByCustomer.get(customer.id) || [];
+      const summary = summaryByCustomer.get(customer.id);
       return {
         ...customer,
-        email: customerOrders[0]?.email || null,
-        order_count: customerOrders.length,
-        latest_order_at: customerOrders[0]?.created_at || null,
+        email: summary?.latestOrder?.email || null,
+        order_count: summary?.orderCount,
+        latest_order_at: summary?.latestOrder?.created_at || null,
       };
     });
   }
@@ -482,15 +491,22 @@ export class SupabaseService {
       select: "id,order_number,email,status,currency,total,created_at",
       user_id: `eq.${id}`,
       order: "created_at.desc",
-      limit: "1000",
+      limit: "100",
     });
-    const orders = await this.#db(`orders?${orderParams}`);
+    const orderResult = await this.#db(`orders?${orderParams}`, {
+      exactCount: true,
+      range: "0-99",
+    });
+    const orders = orderResult.data;
 
     return {
       ...rows[0],
       email: orders[0]?.email || null,
-      order_count: orders.length,
+      order_count: orderResult.count,
       orders,
+      orders_truncated: orderResult.count === null
+        ? null
+        : orderResult.count > orders.length,
     };
   }
 
