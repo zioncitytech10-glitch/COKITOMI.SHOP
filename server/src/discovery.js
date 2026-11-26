@@ -104,6 +104,10 @@ export class ProductDiscovery {
       } catch (error) {
         diagnostics.evaluationFailures++;
         recordFailure("product_evaluation", error);
+        const lastFailure = diagnostics.failures[diagnostics.failures.length - 1];
+        if (lastFailure && lastFailure.phase === "product_evaluation") {
+          lastFailure.productId = String(first(summary.pid, summary.productId, summary.id, "")).slice(0, 80) || null;
+        }
       }
     }
     recommendations.sort((a, b) => b.commercial_score - a.commercial_score);
