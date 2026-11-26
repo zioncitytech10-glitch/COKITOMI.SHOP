@@ -49,8 +49,8 @@ const isTeddyBearCandidate = (title, categoryText) => {
   const category = String(categoryText || "").toLowerCase();
   // Require the product name itself to identify a teddy/plush/bear item.
   // Category text can strengthen a bear match, but generic descriptions do not.
-  return /\\b(teddy|plush|plushie|stuffed\\s+animal)\\b/i.test(name)
-    || (/\\bbear\\b/i.test(name) && /\\b(toy|toys|plush|stuffed|doll)\\b/i.test(category));
+  return /\b(teddy|plush|plushie|stuffed\s+animal)\b/i.test(name)
+    || (/\bbear\b/i.test(name) && /\b(toy|toys|plush|stuffed|doll)\b/i.test(category));
 };
 const withStage = async (stage, operation) => {
   try { return await operation(); }
@@ -115,7 +115,6 @@ export class ProductDiscovery {
       evaluationFailures: 0,
       recommendationsSaved: 0,
       productsFilteredAsIrrelevant: 0,
-      productsMissingTitle: 0,
       failures: [],
     };
     const recordFailure = (phase, error) => {
