@@ -1,6 +1,15 @@
 import { scoreCandidate } from "./scoring.js";
 
-const KEYWORDS = ["teddy bear", "plush bear", "giant teddy bear", "rose teddy bear", "teddy bear gift"];
+const KEYWORDS = [
+  "teddy bear",
+  "stuffed teddy bear",
+  "giant teddy bear",
+  "plush teddy bear toy",
+  "rose teddy bear",
+  "teddy bear gift",
+  "soft stuffed bear toy",
+  "teddy plush animal toy",
+];
 // CJ Product List V2 nests actual products inside data.content[].productList[].
 const unwrap = (r) => {
   const data = r?.data;
@@ -45,15 +54,23 @@ const productCategoryText = (detail, summary) => [
   summary?.categoryName, summary?.categoryNameEn, summary?.category,
   summary?.productType,
 ].filter((value) => typeof value === "string").join(" ");
-const isTeddyBearCandidate = (title, categoryText) => {
-  const name = String(title || "").toLowerCase();
+export const isTeddyBearCandidate = (title, categoryText = "") => {
+  const name = String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const category = String(categoryText || "").toLowerCase();
-  // "Plush" alone is not sufficient: clothing and blankets often use plush fabric.
-  // Require teddy/bear in the title, or a clearly identified stuffed toy.
-  const explicitBear = /\b(teddy\s*bear|teddy|bear)\b/i.test(name);
-  const explicitStuffedToy = /\b(plushie|stuffed\s+animal|plush\s+toy|stuffed\s+toy)\b/i.test(name);
-  const toyCategory = /\b(toy|toys|doll|stuffed\s+animal|plush\s+toy)\b/i.test(category);
-  return explicitBear || explicitStuffedToy || (/\bplush\b/i.test(name) && toyCategory);
+  if (!name) return false;
+
+  // Exclude apparel, home textiles and accessories even when "plush" or "bear"
+  // appears in the title or category.
+  const nonToyProduct = /\\b(jacket|coat|parka|hoodie|sweatshirt|sweater|shirt|pants|trousers|dress|skirt|clothing|apparel|slippers|shoes|boots|blanket|pillow|cushion|bedding|bag|backpack|wallet|keychain|phone case|fabric|material)\\b/i;
+  if (nonToyProduct.test(name)) return false;
+
+  const teddyBear = /\\bteddy\\s+bear\\b/i.test(name);
+  const stuffedBear = /\\b(bear|teddy)\\b/i.test(name)
+    && /\\b(plush|stuffed|soft toy|toy)\\b/i.test(name);
+  const explicitStuffedAnimal = /\\b(stuffed animal|plush toy|plushie|soft toy)\\b/i.test(name)
+    && /\\b(bear|teddy)\\b/i.test(name);
+  const toyCategory = /\\b(toy|toys|doll|stuffed animal|plush toy)\\b/i.test(category);
+  return teddyBear || stuffedBear || explicitStuffedAnimal || (toyCategory && /\\b(bear|teddy)\\b/i.test(name));
 };
 const withStage = async (stage, operation) => {
   try { return await operation(); }
@@ -145,7 +162,17 @@ export class ProductDiscovery {
       }
     }
 
-    const candidates = [...products.values()].slice(0, this.config.maxCandidates);
+    // CJ keyword search can return loosely related products. Prefer titles that
+    // already contain teddy/bear toy terms before applying the candidate cap.
+    const candidates = [...products.values()]
+      .sort((a, b) => {
+        const title = (item) => String(first(item.nameEn, item.productNameEn, item.productName, item.name, "")).toLowerCase();
+        const relevance = (item) => /\\bteddy\\s*bear\\b/.test(title(item)) ? 3
+          : /\\b(bear|teddy)\\b/.test(title(item)) && /\\b(plush|stuffed|toy)\\b/.test(title(item)) ? 2
+          : /\\b(bear|teddy)\\b/.test(title(item)) ? 1 : 0;
+        return relevance(b) - relevance(a);
+      })
+      .slice(0, this.config.maxCandidates * 2);
     diagnostics.uniqueProducts = candidates.length;
     const recommendations = [];
     for (const summary of candidates) {
