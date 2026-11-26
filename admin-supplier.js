@@ -25,12 +25,28 @@ export async function renderSupplierView(host, api) {
   toolbar.append(category, season, search, status); host.append(toolbar);
   category.addEventListener("change", () => { search.textContent = `Research ${category.options[category.selectedIndex].text}`; });
   const notice = make("p", "admin-notice"); notice.setAttribute("role", "status"); host.append(notice);
+  const cleanup = make("div", "supplier-cleanup");
+  const clearRejected = make("button", "quiet-button danger-button", "Delete all rejected, unpublished records");
+  clearRejected.type = "button"; clearRejected.hidden = true;
+  clearRejected.addEventListener("click", async () => {
+    const confirmed = window.confirm("Permanently delete every rejected, unpublished supplier recommendation? Published products will not be touched. This cannot be undone.");
+    if (!confirmed) return;
+    clearRejected.disabled = true;
+    try {
+      const result = await api("/api/admin/recommendations?status=rejected", { method: "DELETE" });
+      notice.textContent = `Deleted ${result.count} rejected, unpublished recommendation record(s).`;
+      await refresh();
+    } catch (error) { notice.textContent = error.message; }
+    finally { clearRejected.disabled = false; }
+  });
+  cleanup.append(clearRejected); host.append(cleanup);
   const list = make("div", "admin-product-list"); host.append(list);
   const refresh = async () => {
     list.replaceChildren(make("p", "muted", "Loading recommendations…"));
     try {
       const result = await api(`/api/admin/recommendations?status=${encodeURIComponent(status.value)}&limit=100`);
       list.replaceChildren();
+      clearRejected.hidden = status.value !== "rejected" || !result.recommendations?.length;
       if (!result.recommendations?.length) list.append(make("p", "muted", `No ${status.value} recommendations.`));
       for (const recommendation of result.recommendations || []) list.append(renderRecommendation(recommendation, api, refresh));
     } catch (error) { list.replaceChildren(make("p", "admin-notice", error.message)); }
@@ -80,14 +96,27 @@ function renderRecommendation(rec, api, refresh) {
     row.append(description); details.append(row);
   }
   card.append(details);
-  if (rec.description) card.append(make("p", "record-meta", rec.description));
+  if (rec.research_signals?.product_category || rec.research_signals?.seasonal_collection) {
+    const categoryLabels = { teddy_bears: "Teddy Bears", rose_bouquets: "Roses & Flower Bouquets", romantic_gifts: "Romantic Gifts & Gift Bundles" };
+    const seasonLabels = { year_round: "Year-round", christmas_2026: "Christmas 2026", new_year_2027: "New Year 2027", valentines_2027: "Valentine's Day 2027" };
+    card.append(make("p", "record-meta", `Category: ${categoryLabels[rec.research_signals.product_category] || rec.research_signals.product_category || "Unknown"} · Collection: ${seasonLabels[rec.research_signals.seasonal_collection] || rec.research_signals.seasonal_collection || "Unknown"}`));
+  }
+  if (rec.description) {
+    const cleanDescription = String(rec.description).replace(/<br\\s*\\/?\\s*>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">").replace(/\\s+/g, " ").trim();
+    if (cleanDescription) card.append(make("p", "record-meta", cleanDescription.slice(0, 600)));
+  }
   const actions = make("div", "admin-record-actions");
   if (rec.status === "pending") {
     actions.append(action("Approve", "quiet-button", async () => { await changeStatus(api, rec.id, "approved"); await refresh(); }));
     actions.append(action("Reject", "quiet-button danger-button", async () => { await changeStatus(api, rec.id, "rejected"); await refresh(); }));
   }
   if (rec.status === "approved" && !rec.published_product_id) actions.append(makePublishForm(rec, api, refresh));
-  if (rec.published_product_id) actions.append(make("p", "admin-notice", `Published as storefront product ${rec.published_product_id}${rec.published_at ? ` on ${new Date(rec.published_at).toLocaleDateString()}` : ""}.`));
+  if (rec.published_product_id) actions.append(make("p", "admin-notice", `Published as storefront product ${rec.published_product_id}${rec.published_at ? ` on ${new Date(rec.published_at).toLocaleDateString()}` : ""}. Published records are protected from deletion.`));
+  else actions.append(action("Delete record", "quiet-button danger-button", async () => {
+    if (!window.confirm(`Permanently delete "${rec.title}" from supplier research?`)) return;
+    await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}`, { method: "DELETE" });
+    await refresh();
+  }));
   card.append(actions);
   return card;
 }
