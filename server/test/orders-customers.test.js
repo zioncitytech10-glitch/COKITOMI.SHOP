@@ -124,11 +124,11 @@ test("order detail rejects malformed IDs before network access", async () => {
   assert.equal(calls, 0);
 });
 
-test("customer listing joins each customer's latest order, email and order count", async () => {
+test("customer listing uses exact order counts and latest order metadata", async () => {
   const calls = [];
-  const service = serviceWith(async (url) => {
+  const service = serviceWith(async (url, options) => {
     const parsed = new URL(url);
-    calls.push(parsed);
+    calls.push({ url: parsed, headers: options.headers });
     if (parsed.pathname.endsWith("/customer_profiles")) {
       return Response.json([
         { id: USER_A, full_name: "Ada Customer", phone: "08010000001" },
@@ -136,11 +136,14 @@ test("customer listing joins each customer's latest order, email and order count
       ]);
     }
     if (parsed.pathname.endsWith("/orders")) {
-      return Response.json([
-        { user_id: USER_A, order_number: "CK-1002", status: "paid", total: 80, email: "ada@example.com", created_at: "2026-11-20T10:00:00Z" },
-        { user_id: USER_B, order_number: "CK-1003", status: "pending", total: 30, email: "ben@example.com", created_at: "2026-11-19T10:00:00Z" },
-        { user_id: USER_A, order_number: "CK-1001", status: "delivered", total: 40, email: "ada@example.com", created_at: "2026-11-18T10:00:00Z" },
-      ]);
+      const userId = parsed.searchParams.get("user_id");
+      const row = userId === `eq.${USER_A}`
+        ? { user_id: USER_A, email: "ada@example.com", created_at: "2026-11-20T10:00:00Z" }
+        : { user_id: USER_B, email: "ben@example.com", created_at: "2026-11-19T10:00:00Z" };
+      const count = userId === `eq.${USER_A}` ? 1250 : 1;
+      return new Response(JSON.stringify([row]), {
+        headers: { "Content-Type": "application/json", "Content-Range": `0-0/${count}` },
+      });
     }
     throw new Error("Unexpected table request");
   });
@@ -148,15 +151,19 @@ test("customer listing joins each customer's latest order, email and order count
   const customers = await service.listCustomers({ limit: 20, offset: 10, search: "Ada" });
   assert.equal(customers.length, 2);
   assert.equal(customers[0].email, "ada@example.com");
-  assert.equal(customers[0].order_count, 2);
+  assert.equal(customers[0].order_count, 1250);
   assert.equal(customers[0].latest_order_at, "2026-11-20T10:00:00Z");
   assert.equal(customers[1].email, "ben@example.com");
   assert.equal(customers[1].order_count, 1);
 
-  assert.equal(calls[0].searchParams.get("limit"), "20");
-  assert.equal(calls[0].searchParams.get("offset"), "10");
-  assert.equal(calls[0].searchParams.get("or"), "(full_name.ilike.*Ada*,phone.ilike.*Ada*)");
-  assert.equal(calls[1].searchParams.get("user_id"), `in.(${USER_A},${USER_B})`);
+  assert.equal(calls[0].url.searchParams.get("limit"), "20");
+  assert.equal(calls[0].url.searchParams.get("offset"), "10");
+  assert.equal(calls[0].url.searchParams.get("or"), "(full_name.ilike.*Ada*,phone.ilike.*Ada*)");
+  assert.equal(calls[1].url.searchParams.get("user_id"), `eq.${USER_A}`);
+  assert.equal(calls[1].url.searchParams.get("limit"), "1");
+  assert.equal(calls[1].headers.Range, "0-0");
+  assert.equal(calls[2].url.searchParams.get("user_id"), `eq.${USER_B}`);
+  assert.equal(calls[2].headers.Range, "0-0");
 });
 
 test("customer listing returns an empty array without querying orders when no customers exist", async () => {
@@ -183,15 +190,19 @@ test("customer listing rejects invalid page and search inputs before network acc
   assert.equal(calls, 0);
 });
 
-test("customer detail returns the profile and order history", async () => {
-  const service = serviceWith(async (url) => {
+test("customer detail returns exact order count and flags truncated history", async () => {
+  let orderRequestHeaders;
+  const service = serviceWith(async (url, options) => {
     if (url.includes("/customer_profiles?")) {
       return Response.json([{ id: USER_A, full_name: "Ada Customer", phone: "08010000001" }]);
     }
     if (url.includes("/orders?")) {
-      return Response.json([
+      orderRequestHeaders = options.headers;
+      return new Response(JSON.stringify([
         { id: ORDER_A, order_number: "CK-1001", email: "ada@example.com", status: "paid", currency: "USD", total: 40, created_at: "2026-11-20T10:00:00Z" },
-      ]);
+      ]), {
+        headers: { "Content-Type": "application/json", "Content-Range": "0-0/1250" },
+      });
     }
     throw new Error("Unexpected table request");
   });
@@ -199,8 +210,10 @@ test("customer detail returns the profile and order history", async () => {
   const customer = await service.getCustomer(USER_A);
   assert.equal(customer.id, USER_A);
   assert.equal(customer.email, "ada@example.com");
-  assert.equal(customer.order_count, 1);
+  assert.equal(customer.order_count, 1250);
   assert.equal(customer.orders[0].order_number, "CK-1001");
+  assert.equal(customer.orders_truncated, true);
+  assert.equal(orderRequestHeaders.Range, "0-99");
 });
 
 test("customer detail returns null without querying orders when profile is missing", async () => {
