@@ -53,23 +53,23 @@ const productCategoryText = (detail, summary) => [
 export const isTeddyBearCandidate = (title, categoryText = "") => {
   const name = String(title || "").toLowerCase();
   const category = String(categoryText || "").toLowerCase();
-  const excluded = /\\b(jacket|coat|hoodie|shirt|pants|dress|clothing|blanket|pillow|cushion|bag|keychain|phone case)\\b/i;
+  const excluded = /\b(jacket|coat|hoodie|shirt|pants|dress|clothing|blanket|pillow|cushion|bag|keychain|phone case)\b/i;
   if (excluded.test(name)) return false;
-  return /\\bteddy\\s*bear\\b/i.test(name)
-    || (/\\b(bear|teddy)\\b/i.test(name) && /\\b(plush|stuffed|toy)\\b/i.test(name));
+  return /\bteddy\s*bear\b/i.test(name)
+    || (/\b(bear|teddy)\b/i.test(name) && /\b(plush|stuffed|toy)\b/i.test(name));
 };
 export const isRoseBouquetCandidate = (title, categoryText = "") => {
   const name = String(title || "").toLowerCase();
   const category = String(categoryText || "").toLowerCase();
-  const excluded = /\\b(dress|shirt|jacket|fabric|wallpaper|phone case|nail|sticker|print)\\b/i;
+  const excluded = /\b(dress|shirt|jacket|fabric|wallpaper|phone case|nail|sticker|print)\b/i;
   if (excluded.test(name)) return false;
-  return /\\b(rose|roses)\\b/i.test(name)
-    && /\\b(bouquet|flower|flowers|preserved|eternal|soap rose|gift box)\\b/i.test(name + " " + category);
+  return /\b(rose|roses)\b/i.test(name)
+    && /\b(bouquet|flower|flowers|preserved|eternal|soap rose|gift box)\b/i.test(name + " " + category);
 };
 export const isRomanticGiftCandidate = (title) => {
   const name = String(title || "").toLowerCase();
-  if (/\\b(teddy|bear|rose|roses)\\b/i.test(name)) return true;
-  return /\\b(couple bracelet|matching bracelet|romantic gift box|personalised gift|personalized gift|heart shaped plush)\\b/i.test(name);
+  if (/\b(teddy|bear|rose|roses)\b/i.test(name)) return true;
+  return /\b(couple bracelet|matching bracelet|romantic gift box|personalised gift|personalized gift|heart shaped plush)\b/i.test(name);
 };
 const withStage = async (stage, operation) => {
   try { return await operation(); }
