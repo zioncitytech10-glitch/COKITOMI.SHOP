@@ -33,6 +33,38 @@ const discovery = new ProductDiscovery({ cj, config, supabase });
 
 const MAX_BODY = 16 * 1024;
 
+const ORDER_STATUSES = [
+  "pending",
+  "payment_processing",
+  "paid",
+  "submitted_to_supplier",
+  "processing",
+  "shipped",
+  "delivered",
+  "cancelled",
+  "refunded",
+  "fulfillment_error",
+];
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function getPagination(url) {
+  const limitValue = url.searchParams.get("limit");
+  const offsetValue = url.searchParams.get("offset");
+  const limit = limitValue === null ? 50 : Number(limitValue);
+  const offset = offsetValue === null ? 0 : Number(offsetValue);
+
+  if (
+    !Number.isSafeInteger(limit) ||
+    !Number.isSafeInteger(offset) ||
+    limit < 1 ||
+    offset < 0
+  ) return null;
+
+  return { limit: Math.min(limit, 100), offset };
+}
+
 function send(res, status, body) {
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -144,6 +176,79 @@ const server = createServer(async (req, res) => {
         return send(res, 401, {
           error: "Admin authentication required",
         });
+      }
+
+
+      // Read-only order management
+      if (req.method === "GET" && url.pathname === "/api/admin/orders") {
+        const pagination = getPagination(url);
+        if (!pagination) {
+          return send(res, 400, { error: "Invalid pagination parameters" });
+        }
+
+        const status = url.searchParams.get("status");
+        const search = url.searchParams.get("search");
+
+        if (status && !ORDER_STATUSES.includes(status)) {
+          return send(res, 400, { error: "Invalid order status" });
+        }
+        if (search && search.length > 120) {
+          return send(res, 400, { error: "Search term is too long" });
+        }
+
+        const orders = await supabase.listOrders({
+          ...pagination,
+          status: status || null,
+          search: search || null,
+        });
+        return send(res, 200, orders);
+      }
+
+      const orderMatch = url.pathname.match(
+        /^\/api\/admin\/orders\/([^/]+)$/,
+      );
+      if (req.method === "GET" && orderMatch) {
+        const id = orderMatch[1];
+        if (!UUID_PATTERN.test(id)) {
+          return send(res, 400, { error: "Invalid order ID" });
+        }
+        const order = await supabase.getOrder(id);
+        return order
+          ? send(res, 200, { order })
+          : send(res, 404, { error: "Order not found" });
+      }
+
+      // Read-only customer management
+      if (req.method === "GET" && url.pathname === "/api/admin/customers") {
+        const pagination = getPagination(url);
+        if (!pagination) {
+          return send(res, 400, { error: "Invalid pagination parameters" });
+        }
+
+        const search = url.searchParams.get("search");
+        if (search && search.length > 120) {
+          return send(res, 400, { error: "Search term is too long" });
+        }
+
+        const customers = await supabase.listCustomers({
+          ...pagination,
+          search: search || null,
+        });
+        return send(res, 200, customers);
+      }
+
+      const customerMatch = url.pathname.match(
+        /^\/api\/admin\/customers\/([^/]+)$/,
+      );
+      if (req.method === "GET" && customerMatch) {
+        const id = customerMatch[1];
+        if (!UUID_PATTERN.test(id)) {
+          return send(res, 400, { error: "Invalid customer ID" });
+        }
+        const customer = await supabase.getCustomer(id);
+        return customer
+          ? send(res, 200, { customer })
+          : send(res, 404, { error: "Customer not found" });
       }
 
       // CJ supplier research

@@ -1,3 +1,45 @@
+
+const ORDER_STATUSES = new Set([
+  "pending",
+  "payment_processing",
+  "paid",
+  "submitted_to_supplier",
+  "processing",
+  "shipped",
+  "delivered",
+  "cancelled",
+  "refunded",
+  "fulfillment_error",
+]);
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function validatePage({ limit, offset }) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new TypeError("limit must be an integer between 1 and 100");
+  }
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new TypeError("offset must be a non-negative integer");
+  }
+}
+
+function validateUuid(id, label) {
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) {
+    throw new TypeError(`Invalid ${label} ID`);
+  }
+}
+
+function cleanSearch(value) {
+  if (value == null || value === "") return "";
+  if (typeof value !== "string") throw new TypeError("search must be a string");
+  return value
+    .normalize("NFKC")
+    .replace(/[^\p{L}\p{N}@+\- ]/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
+}
+
 export class SupabaseService {
   constructor({ url, publishableKey, serviceRoleKey, fetchImpl = fetch }) {
     this.url = url;
@@ -28,7 +70,7 @@ export class SupabaseService {
       : null;
   }
 
-  async #db(path, { method = "GET", body, query = "", exactCount = false } = {}) {
+  async #db(path, { method = "GET", body, query = "", exactCount = false, range = "0-0" } = {}) {
     const isModernApiKey =
       this.serviceRoleKey.startsWith("sb_secret_") ||
       this.serviceRoleKey.startsWith("sb_publishable_");
@@ -51,7 +93,7 @@ export class SupabaseService {
               : method === "POST" && path.startsWith("product_recommendations")
                 ? "resolution=merge-duplicates,return=representation"
                 : "return=representation",
-            ...(exactCount ? { Range: "0-0" } : {}),
+            ...(exactCount ? { Range: range } : {}),
           },
           ...(body ? { body: JSON.stringify(body) } : {}),
           signal: AbortSignal.timeout(20000),
@@ -330,4 +372,146 @@ export class SupabaseService {
 
     return Array.isArray(rows) ? rows[0] || null : rows;
   }
+
+  // Read-only administrator order listing. The caller enforces authentication.
+  async listOrders({ limit = 50, offset = 0, status = null, search = null } = {}) {
+    validatePage({ limit, offset });
+    if (status && !ORDER_STATUSES.has(status)) {
+      throw new TypeError("Invalid order status");
+    }
+
+    const params = new URLSearchParams({
+      select: "id,user_id,order_number,email,status,currency,subtotal,shipping_total,tax_total,total,shipping_name,payment_provider,payment_reference,supplier_order_id,tracking_number,tracking_url,created_at,updated_at",
+      order: "created_at.desc,id.desc",
+      limit: String(limit),
+      offset: String(offset),
+    });
+
+    if (status) params.set("status", `eq.${status}`);
+
+    const term = cleanSearch(search);
+    if (term) {
+      params.set("or", `(order_number.ilike.*${term}*,email.ilike.*${term}*)`);
+    }
+
+    return this.#db(`orders?${params}`);
+  }
+
+  // Read one order and its purchased line items.
+  async getOrder(id) {
+    validateUuid(id, "order");
+    const params = new URLSearchParams({
+      select: "*",
+      id: `eq.${id}`,
+      limit: "1",
+    });
+    const rows = await this.#db(`orders?${params}`);
+    if (!rows.length) return null;
+
+    const itemParams = new URLSearchParams({
+      select: "*",
+      order_id: `eq.${id}`,
+      order: "id.asc",
+    });
+    const items = await this.#db(`order_items?${itemParams}`);
+
+    return { ...rows[0], items };
+  }
+
+  // Customer list includes order count and most recent order details for each
+  // customer on the requested page. This is a read-only admin operation.
+  async listCustomers({ limit = 50, offset = 0, search = null } = {}) {
+    validatePage({ limit, offset });
+    const params = new URLSearchParams({
+      select: "id,full_name,phone,created_at,updated_at",
+      order: "created_at.desc,id.desc",
+      limit: String(limit),
+      offset: String(offset),
+    });
+
+    const term = cleanSearch(search);
+    if (term) {
+      params.set("or", `(full_name.ilike.*${term}*,phone.ilike.*${term}*)`);
+    }
+
+    const customers = await this.#db(`customer_profiles?${params}`);
+    if (!customers.length) return [];
+
+    customers.forEach((customer) => validateUuid(customer.id, "customer"));
+
+    // Fetch exact counts and latest-order metadata in small batches. This
+    // avoids both Supabase response-page caps and bursts of 100 requests.
+    const summaries = [];
+    const batchSize = 10;
+
+    for (let start = 0; start < customers.length; start += batchSize) {
+      const batch = customers.slice(start, start + batchSize);
+      const batchSummaries = await Promise.all(batch.map(async (customer) => {
+        const orderParams = new URLSearchParams({
+          select: "user_id,email,created_at",
+          user_id: `eq.${customer.id}`,
+          order: "created_at.desc",
+          limit: "1",
+        });
+        const result = await this.#db(`orders?${orderParams}`, {
+          exactCount: true,
+          range: "0-0",
+        });
+        return {
+          customerId: customer.id,
+          latestOrder: result.data[0] || null,
+          orderCount: result.count,
+        };
+      }));
+      summaries.push(...batchSummaries);
+    }
+    const summaryByCustomer = new Map(
+      summaries.map((summary) => [summary.customerId, summary])
+    );
+
+    return customers.map((customer) => {
+      const summary = summaryByCustomer.get(customer.id);
+      return {
+        ...customer,
+        email: summary?.latestOrder?.email || null,
+        order_count: summary?.orderCount,
+        latest_order_at: summary?.latestOrder?.created_at || null,
+      };
+    });
+  }
+
+  // Read one customer and the customer's order history.
+  async getCustomer(id) {
+    validateUuid(id, "customer");
+    const params = new URLSearchParams({
+      select: "id,full_name,phone,created_at,updated_at",
+      id: `eq.${id}`,
+      limit: "1",
+    });
+    const rows = await this.#db(`customer_profiles?${params}`);
+    if (!rows.length) return null;
+
+    const orderParams = new URLSearchParams({
+      select: "id,order_number,email,status,currency,total,created_at",
+      user_id: `eq.${id}`,
+      order: "created_at.desc",
+      limit: "100",
+    });
+    const orderResult = await this.#db(`orders?${orderParams}`, {
+      exactCount: true,
+      range: "0-99",
+    });
+    const orders = orderResult.data;
+
+    return {
+      ...rows[0],
+      email: orders[0]?.email || null,
+      order_count: orderResult.count,
+      orders,
+      orders_truncated: orderResult.count === null
+        ? null
+        : orderResult.count > orders.length,
+    };
+  }
+
 }
