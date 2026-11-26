@@ -1,7 +1,7 @@
 import { scoreCandidate } from "./scoring.js";
 
 const CATEGORY_SEARCHES = {
-  teddy_bears: ["teddy bear", "stuffed teddy bear", "giant teddy bear", "plush teddy bear toy", "rose teddy bear", "teddy bear gift", "soft stuffed bear toy", "teddy plush animal toy"],
+  teddy_bears: ["teddy bear plush", "stuffed bear toy", "plush bear", "giant stuffed teddy bear", "soft toy bear", "cute teddy bear", "bear plush toy", "stuffed animal bear"],
   rose_bouquets: ["artificial rose bouquet", "preserved rose bouquet", "soap rose bouquet", "red rose gift box", "pink rose bouquet", "eternal rose gift"],
   romantic_gifts: ["teddy bear rose gift set", "teddy bear and rose bouquet", "couple bracelet set", "personalised romantic gift", "romantic gift box teddy rose", "heart teddy bear gift"],
 };
@@ -50,13 +50,17 @@ const productCategoryText = (detail, summary) => [
   summary?.categoryName, summary?.categoryNameEn, summary?.category,
   summary?.productType,
 ].filter((value) => typeof value === "string").join(" ");
-export const isTeddyBearCandidate = (title, categoryText = "") => {
+export const isTeddyBearCandidate = (title, categoryText = "", description = "") => {
   const name = String(title || "").toLowerCase();
   const category = String(categoryText || "").toLowerCase();
-  const excluded = /\b(jacket|coat|hoodie|shirt|pants|dress|clothing|blanket|pillow|cushion|bag|keychain|phone case|wall art|poster|print)\b/i;
-  if (excluded.test(name)) return false;
-  return /\bteddy\s*bear\b/i.test(name)
-    || (/\b(bear|teddy)\b/i.test(name) && /\b(plush|stuffed|toy)\b/i.test(name));
+  const details = String(description || "").toLowerCase();
+  // Exclude non-toy products even when a loose CJ keyword result mentions teddy/bear.
+  const excluded = /\b(jacket|coat|hoodie|shirt|pants|dress|clothing|blanket|pillow|cushion|bag|keychain|phone\s*case|wall\s*art|poster|print|cup|mug|tumbler|glass|bottle|drinkware|lamp|light|curtain|rug|mat|car\s*seat|costume)\b/i;
+  if (excluded.test(name + " " + details)) return false;
+  const hasBear = /\b(teddy|bear)\b/i.test(name);
+  const toyEvidence = /\b(plush|stuffed|soft\s*toy|soft\s*stuffed|toy|teddy\s*bear|stuffed\s*animals?)\b/i.test(name + " " + category);
+  const descriptionEvidence = /\b(plush|stuffed\s*animals?|soft\s*toy|teddy\s*bear)\b/i.test(details);
+  return hasBear && (toyEvidence || descriptionEvidence);
 };
 export const isRoseBouquetCandidate = (title, categoryText = "") => {
   const name = String(title || "").toLowerCase();
@@ -169,17 +173,21 @@ export class ProductDiscovery {
       }
     }
 
-    // CJ keyword search can return loosely related products. Prefer titles that
-    // already contain teddy/bear toy terms before applying the candidate cap.
+    // Rank likely teddy-bear toys first, but let product details confirm loose keyword hits.
     const candidates = [...products.values()]
       .sort((a, b) => {
         const title = (item) => String(first(item.nameEn, item.productNameEn, item.productName, item.name, "")).toLowerCase();
-        const relevance = (item) => /\bteddy\s*bear\b/.test(title(item)) ? 3
-          : /\b(bear|teddy)\b/.test(title(item)) && /\b(plush|stuffed|toy)\b/.test(title(item)) ? 2
-          : /\b(bear|teddy)\b/.test(title(item)) ? 1 : 0;
+        const relevance = (item) => {
+          const name = title(item);
+          if (/\b(cup|mug|tumbler|glass|bottle|jacket|coat|hoodie|shirt|blanket|pillow|keychain)\b/i.test(name)) return -2;
+          if (/\bteddy\s*bear\b/i.test(name)) return 4;
+          if (/\b(bear|teddy)\b/i.test(name) && /\b(plush|stuffed|toy|soft)\b/i.test(name)) return 3;
+          if (/\b(bear|teddy)\b/i.test(name)) return 2;
+          return 0;
+        };
         return relevance(b) - relevance(a);
       })
-      .slice(0, this.config.maxCandidates * 2);
+      .slice(0, Math.min(60, this.config.maxCandidates * 3));
     diagnostics.uniqueProducts = candidates.length;
     const recommendations = [];
     for (const summary of candidates) {
@@ -234,7 +242,7 @@ export class ProductDiscovery {
       return null;
     }
     const categoryText = productCategoryText(detail, summary);
-    if (!isRelevant(titleValue, categoryText)) {
+    if (!isRelevant(titleValue, categoryText, first(detail.description, detail.productDescription, ""))) {
       return null;
     }
     let variants = Array.isArray(detail.variants) ? detail.variants : [];
