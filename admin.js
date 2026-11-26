@@ -2,6 +2,7 @@ import { logoutAndRedirect } from "./admin-session.js";
 import { createAdminApi } from "./admin-api.js";
 import { renderProductsView } from "./admin-products.js";
 import { renderSupplierView } from "./admin-supplier.js";
+import { renderOrdersView, renderCustomersView } from "./admin-orders-customers.js";
 
 (() => {
   "use strict";
@@ -148,7 +149,7 @@ import { renderSupplierView } from "./admin-supplier.js";
   document.getElementById("logoutButton").addEventListener("click", signOut);
 
   async function showView(view) {
-    const labels = { overview: "Business overview", products: "Products", supplier: "CJ Supplier research" };
+    const labels = { overview: "Business overview", products: "Products", orders: "Orders", customers: "Customers", supplier: "CJ Supplier research" };
     document.querySelectorAll("[data-view]").forEach((button) => {
       const selected = button.dataset.view === view;
       button.classList.toggle("active", selected);
@@ -157,6 +158,8 @@ import { renderSupplierView } from "./admin-supplier.js";
     document.querySelector(".topbar h1").textContent = labels[view] || labels.overview;
     if (view === "products") return renderProductsView(overviewContent, adminApi);
     if (view === "supplier") return renderSupplierView(overviewContent, adminApi);
+    if (view === "orders") return renderOrdersView(overviewContent, adminApi);
+    if (view === "customers") return renderCustomersView(overviewContent, adminApi);
     if (overviewData) renderOverview(overviewData);
   }
 
