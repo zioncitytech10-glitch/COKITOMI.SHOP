@@ -122,7 +122,7 @@ export async function renderOrdersView(host, api) {
           const actionCell = document.createElement("td");
           const details = make("button", "table-action", "View order");
           details.type = "button";
-          details.addEventListener("click", () => showOrderDetail(order, results, load));
+          details.addEventListener("click", () => showOrderDetail(order, results, load, api));
           actionCell.append(details);
           row.append(actionCell);
           tbody.append(row);
@@ -146,7 +146,7 @@ export async function renderOrdersView(host, api) {
   await load();
 }
 
-async function showOrderDetail(order, host, reload) {
+async function showOrderDetail(order, host, reload, api) {
   const panel = make("section", "admin-detail-panel");
   panel.append(make("div", "admin-detail-heading", `Order ${shown(order.order_number)}`), make("p", "admin-notice", "Loading order details…"));
   const close = make("button", "quiet-button", "Close details");
@@ -155,7 +155,7 @@ async function showOrderDetail(order, host, reload) {
   panel.querySelector(".admin-detail-heading").append(close);
   host.prepend(panel);
   try {
-    const result = await window.__cokitomiAdminApi(`/api/admin/orders/${encodeURIComponent(order.id)}`);
+    const result = await api(`/api/admin/orders/${encodeURIComponent(order.id)}`);
     const detail = result.order;
     panel.replaceChildren();
     const heading = make("div", "admin-detail-heading", `Order ${shown(detail.order_number)}`);
@@ -228,7 +228,7 @@ export async function renderCustomersView(host, api) {
           );
           const button = make("button", "table-action", "View customer");
           button.type = "button";
-          button.addEventListener("click", () => showCustomerDetail(customer, results));
+          button.addEventListener("click", () => showCustomerDetail(customer, results, api));
           card.append(button);
           list.append(card);
         });
@@ -248,7 +248,7 @@ export async function renderCustomersView(host, api) {
   await load();
 }
 
-async function showCustomerDetail(customer, host) {
+async function showCustomerDetail(customer, host, api) {
   const panel = make("section", "admin-detail-panel");
   const close = make("button", "quiet-button", "Close details");
   close.type = "button";
@@ -257,7 +257,7 @@ async function showCustomerDetail(customer, host) {
   panel.querySelector(".admin-detail-heading").append(close);
   host.prepend(panel);
   try {
-    const result = await window.__cokitomiAdminApi(`/api/admin/customers/${encodeURIComponent(customer.id)}`);
+    const result = await api(`/api/admin/customers/${encodeURIComponent(customer.id)}`);
     const detail = result.customer;
     panel.replaceChildren();
     const heading = make("div", "admin-detail-heading", shown(detail.full_name, "Customer"));
