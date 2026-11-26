@@ -519,6 +519,7 @@ const server = createServer(async (req, res) => {
         timeoutFailure: error?.timeoutFailure || false,
         networkFailure: error?.networkFailure || false,
         protocolFailure: error?.protocolFailure || false,
+        discoveryDiagnostics: error?.discoveryDiagnostics || null,
       }),
     );
 
@@ -530,6 +531,7 @@ const server = createServer(async (req, res) => {
           ? error.message
           : "Internal service error",
         requestId,
+        ...(error?.discoveryDiagnostics ? { diagnostics: error.discoveryDiagnostics } : {}),
       },
     );
   }
