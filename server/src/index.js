@@ -403,7 +403,7 @@ const server = createServer(async (req, res) => {
         );
 
         if (
-          !["pending", "approved", "rejected"].includes(status)
+          !["pending", "approved", "rejected", "trash"].includes(status)
         ) {
           return send(res, 400, {
             error: "Invalid status",
@@ -418,7 +418,7 @@ const server = createServer(async (req, res) => {
         });
       }
 
-      // Delete one unpublished recommendation record.
+      // Move one unpublished recommendation into recoverable trash.
       const deleteRecommendationMatch = url.pathname.match(
         /^\/api\/admin\/recommendations\/([0-9a-f-]{36})$/i,
       );
@@ -427,23 +427,35 @@ const server = createServer(async (req, res) => {
         if (!UUID_PATTERN.test(id)) {
           return send(res, 400, { error: "Invalid recommendation ID" });
         }
-        const deleted = await supabase.deleteRecommendation(id);
+        const deleted = await supabase.archiveRecommendation(id);
         return deleted
-          ? send(res, 200, { deleted: true, id: deleted.id })
-          : send(res, 404, { error: "Recommendation not found, or it is already published" });
+          ? send(res, 200, { archived: true, id: deleted.id })
+          : send(res, 404, { error: "Recommendation not found, already in trash, or already published" });
       }
 
-      // Bulk cleanup is restricted to rejected and unpublished recommendations.
+      // Bulk cleanup moves rejected, unpublished recommendations into recoverable trash.
       if (req.method === "DELETE" && url.pathname === "/api/admin/recommendations") {
         const status = url.searchParams.get("status");
         if (status !== "rejected") {
-          return send(res, 400, { error: "Bulk deletion is only available for rejected recommendations" });
+          return send(res, 400, { error: "Bulk archive is only available for rejected recommendations" });
         }
-        const deleted = await supabase.deleteRejectedRecommendations();
-        return send(res, 200, { deleted: true, count: deleted.length });
+        const deleted = await supabase.archiveRejectedRecommendations();
+        return send(res, 200, { archived: true, count: deleted.length });
       }
 
-      // Match supplier recommendation IDs
+            const restoreRecommendationMatch = url.pathname.match(
+        /^\/api\/admin\/recommendations\/([0-9a-f-]{36})\/restore$/i,
+      );
+      if (req.method === "POST" && restoreRecommendationMatch) {
+        const id = restoreRecommendationMatch[1];
+        if (!UUID_PATTERN.test(id)) return send(res, 400, { error: "Invalid recommendation ID" });
+        const restored = await supabase.restoreRecommendation(id);
+        return restored
+          ? send(res, 200, { restored: true, id: restored.id })
+          : send(res, 404, { error: "Recommendation not found in trash, or it is already published" });
+      }
+
+// Match supplier recommendation IDs
       const match = url.pathname.match(
         /^\/api\/admin\/recommendations\/([0-9a-f-]{36})$/i,
       );
