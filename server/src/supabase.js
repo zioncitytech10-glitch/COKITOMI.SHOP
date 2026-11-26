@@ -295,6 +295,22 @@ export class SupabaseService {
     return rows[0] || null;
   }
 
+  async moveRejectedToPending(id) {
+    const params = new URLSearchParams({ id: `eq.${id}`, status: "eq.rejected", deleted_at: "is.null", published_product_id: "is.null", select: "id" });
+    const rows = await this.#db(`product_recommendations?${params}`, { method: "PATCH", body: { status: "pending", reviewer_id: null, reviewed_at: null } });
+    return rows[0] || null;
+  }
+
+  async permanentlyDeleteTrashedRecommendation(id) {
+    const params = new URLSearchParams({ id: `eq.${id}`, deleted_at: "not.is.null", published_product_id: "is.null", select: "id" });
+    const rows = await this.#db(`product_recommendations?${params}`, { method: "DELETE" });
+    return rows[0] || null;
+  }
+
+  async permanentlyDeleteTrash() {
+    const params = new URLSearchParams({ deleted_at: "not.is.null", published_product_id: "is.null", select: "id" });
+    return this.#db(`product_recommendations?${params}`, { method: "DELETE" });
+  }
   async listProducts(limit = 200) {
     const params = new URLSearchParams({
       select: "id,supplier,supplier_product_id,slug,name,description,detail_description,price,currency,image_url,gallery_urls,collection_ids,stock_quantity,is_active,created_at,updated_at",
