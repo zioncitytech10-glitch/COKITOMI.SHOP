@@ -257,8 +257,15 @@ const server = createServer(async (req, res) => {
         url.pathname === "/api/admin/cj/research"
       ) {
         const body = await readJson(req);
-        const keywords =
-          body.keywords === undefined ? undefined : body.keywords;
+        const keywords = body.keywords === undefined ? undefined : body.keywords;
+        const category = body.category === undefined ? "teddy_bears" : body.category;
+        const season = body.season === undefined ? "year_round" : body.season;
+        if (!["teddy_bears", "rose_bouquets", "romantic_gifts"].includes(category)) {
+          return send(res, 400, { error: "Invalid research category" });
+        }
+        if (!["christmas_2026", "new_year_2027", "valentines_2027", "year_round"].includes(season)) {
+          return send(res, 400, { error: "Invalid seasonal collection" });
+        }
 
         if (
           keywords !== undefined &&
@@ -274,7 +281,7 @@ const server = createServer(async (req, res) => {
           });
         }
 
-        const result = await discovery.research({ keywords });
+        const result = await discovery.research({ keywords, category, season });
 
         return send(res, 200, result);
       }

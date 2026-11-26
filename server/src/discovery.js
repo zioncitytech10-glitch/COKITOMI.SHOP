@@ -1,15 +1,11 @@
 import { scoreCandidate } from "./scoring.js";
 
-const KEYWORDS = [
-  "teddy bear",
-  "stuffed teddy bear",
-  "giant teddy bear",
-  "plush teddy bear toy",
-  "rose teddy bear",
-  "teddy bear gift",
-  "soft stuffed bear toy",
-  "teddy plush animal toy",
-];
+const CATEGORY_SEARCHES = {
+  teddy_bears: ["teddy bear", "stuffed teddy bear", "giant teddy bear", "plush teddy bear toy", "rose teddy bear", "teddy bear gift", "soft stuffed bear toy", "teddy plush animal toy"],
+  rose_bouquets: ["artificial rose bouquet", "preserved rose bouquet", "soap rose bouquet", "red rose gift box", "pink rose bouquet", "eternal rose gift"],
+  romantic_gifts: ["teddy bear rose gift set", "teddy bear and rose bouquet", "couple bracelet set", "personalised romantic gift", "romantic gift box teddy rose", "heart teddy bear gift"],
+};
+const SEASONS = ["christmas_2026", "new_year_2027", "valentines_2027", "year_round"];
 // CJ Product List V2 nests actual products inside data.content[].productList[].
 const unwrap = (r) => {
   const data = r?.data;
@@ -55,22 +51,27 @@ const productCategoryText = (detail, summary) => [
   summary?.productType,
 ].filter((value) => typeof value === "string").join(" ");
 export const isTeddyBearCandidate = (title, categoryText = "") => {
-  const name = String(title || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const name = String(title || "").toLowerCase();
   const category = String(categoryText || "").toLowerCase();
-  if (!name) return false;
-
-  // Exclude apparel, home textiles and accessories even when "plush" or "bear"
-  // appears in the title or category.
-  const nonToyProduct = /\b(jacket|coat|parka|hoodie|sweatshirt|sweater|shirt|pants|trousers|dress|skirt|clothing|apparel|slippers|shoes|boots|blanket|pillow|cushion|bedding|bag|backpack|wallet|keychain|phone case|fabric|material)\b/i;
-  if (nonToyProduct.test(name)) return false;
-
-  const teddyBear = /\bteddy\s+bear\b/i.test(name);
-  const stuffedBear = /\b(bear|teddy)\b/i.test(name)
-    && /\b(plush|stuffed|soft toy|toy)\b/i.test(name);
-  const explicitStuffedAnimal = /\b(stuffed animal|plush toy|plushie|soft toy)\b/i.test(name)
-    && /\b(bear|teddy)\b/i.test(name);
-  const toyCategory = /\b(toy|toys|doll|stuffed animal|plush toy)\b/i.test(category);
-  return teddyBear || stuffedBear || explicitStuffedAnimal || (toyCategory && /\b(bear|teddy)\b/i.test(name));
+  const excluded = /\b(jacket|coat|hoodie|shirt|pants|dress|clothing|blanket|pillow|cushion|bag|keychain|phone case|wall art|poster|print)\b/i;
+  if (excluded.test(name)) return false;
+  return /\bteddy\s*bear\b/i.test(name)
+    || (/\b(bear|teddy)\b/i.test(name) && /\b(plush|stuffed|toy)\b/i.test(name));
+};
+export const isRoseBouquetCandidate = (title, categoryText = "") => {
+  const name = String(title || "").toLowerCase();
+  const category = String(categoryText || "").toLowerCase();
+  const excluded = /\b(dress|shirt|jacket|fabric|wallpaper|phone case|nail|sticker|print)\b/i;
+  if (excluded.test(name)) return false;
+  return /\b(rose|roses)\b/i.test(name)
+    && /\b(bouquet|flower|flowers|preserved|eternal|soap rose|gift box)\b/i.test(name + " " + category);
+};
+export const isRomanticGiftCandidate = (title) => {
+  const name = String(title || "").toLowerCase();
+  if (/\b(clothing|jacket|coat|shirt|dress|blanket|pillow|wall art|poster|phone case|sticker|keychain)\b/i.test(name)) return false;
+  if (/\b(teddy|bear)\b/i.test(name) && /\b(rose|roses|gift|plush|stuffed|toy|bouquet)\b/i.test(name)) return true;
+  if (/\b(rose|roses)\b/i.test(name) && /\b(gift|bouquet|box|preserved|eternal)\b/i.test(name)) return true;
+  return /\b(couple bracelet|matching bracelet|romantic gift box|personalised gift|personalized gift|heart shaped plush)\b/i.test(name);
 };
 const withStage = async (stage, operation) => {
   try { return await operation(); }
@@ -125,7 +126,13 @@ export class ProductDiscovery {
     return unwrap(response);
   }
 
-  async research({ keywords = KEYWORDS, productFlags = [0, 1] } = {}) {
+  async research({ category = "teddy_bears", season = "year_round", keywords, productFlags = [0, 1] } = {}) {
+    if (!Object.hasOwn(CATEGORY_SEARCHES, category)) throw new TypeError("Unsupported product research category");
+    if (!SEASONS.includes(season)) throw new TypeError("Unsupported seasonal collection");
+    const selectedKeywords = Array.isArray(keywords) ? keywords : CATEGORY_SEARCHES[category];
+    const isRelevant = category === "teddy_bears" ? isTeddyBearCandidate
+      : category === "rose_bouquets" ? isRoseBouquetCandidate
+      : isRomanticGiftCandidate;
     const diagnostics = {
       searchesAttempted: 0,
       searchesSucceeded: 0,
@@ -143,7 +150,7 @@ export class ProductDiscovery {
     };
 
     const products = new Map();
-    for (const keyword of keywords.slice(0, 8)) {
+    for (const keyword of selectedKeywords.slice(0, 8)) {
       for (const flag of productFlags.slice(0, 2)) {
         diagnostics.searchesAttempted++;
         try {
@@ -177,7 +184,7 @@ export class ProductDiscovery {
     const recommendations = [];
     for (const summary of candidates) {
       try {
-        const recommendation = await this.#evaluate(summary);
+        const recommendation = await this.#evaluate(summary, { isRelevant, category, season });
         if (recommendation) {
           recommendations.push(recommendation);
           diagnostics.productsEvaluated++;
@@ -210,7 +217,7 @@ export class ProductDiscovery {
     return { searched: candidates.length, saved: diagnostics.recommendationsSaved, diagnostics };
   }
 
-  async #evaluate(summary) {
+  async #evaluate(summary, { isRelevant, category, season }) {
     const rawPid = first(summary._cjPid, summary.pid, summary.productId, summary.id);
     if (rawPid == null || !String(rawPid).trim()) {
       const error = new Error("CJ search result did not contain a product ID");
@@ -227,7 +234,7 @@ export class ProductDiscovery {
       return null;
     }
     const categoryText = productCategoryText(detail, summary);
-    if (!isTeddyBearCandidate(titleValue, categoryText)) {
+    if (!isRelevant(titleValue, categoryText)) {
       return null;
     }
     let variants = Array.isArray(detail.variants) ? detail.variants : [];
@@ -354,7 +361,7 @@ export class ProductDiscovery {
       estimated_margin: scored.estimatedMargin,
       commercial_score: scored.score,
       score_breakdown: scored.breakdown,
-      research_signals: { searched_keyword: summary._searchedKeyword, trending: info.trending, new_arrival: info.newArrival, shipping_quote_available: Boolean(shipping) },
+      research_signals: { searched_keyword: summary._searchedKeyword, product_category: category, seasonal_collection: season, trending: info.trending, new_arrival: info.newArrival, shipping_quote_available: Boolean(shipping) },
       status: "pending",
       researched_at: new Date().toISOString(),
     };
