@@ -402,6 +402,7 @@
     const matched = applySupabaseProducts(rows);
     if (!matched) return;
     initHome();
+    initCollections();
     window.COKITOMI_REFRESH_SHOP?.();
     initProductPage();
     renderCart();
