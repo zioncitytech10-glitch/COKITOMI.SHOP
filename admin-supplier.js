@@ -175,29 +175,88 @@ async function changeStatus(api, id, status) {
   await api(`/api/admin/recommendations/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ status }) });
 }
 
+function suggestedStorefrontCollections(rec) {
+  const title = String(rec.title || "").toLowerCase();
+  const category = rec.research_signals?.product_category;
+  const suggestions = [];
+  if (/\b(rose|roses)\b/.test(title) && /\b(bouquet|bouquets|preserved|eternal|flower|flowers)\b/.test(title) && !/\b(teddy|bear)\b/.test(title)) {
+    suggestions.push("rose-bouquets");
+  }
+  if (/\b(teddy|bear)\b/.test(title) && /\b(rose|roses)\b/.test(title)) suggestions.push("rose-teddy-bears");
+  if (/\b(giant|jumbo|extra large|oversized)\b/.test(title)) suggestions.push("giant-teddy-bears");
+  if (/\b(luxury|premium|deluxe)\b/.test(title)) suggestions.push("luxury-teddy-bears");
+  if (/\b(birthday)\b/.test(title)) suggestions.push("birthday-gifts");
+  if (/\b(anniversary|couple|romantic|valentine)\b/.test(title)) suggestions.push("anniversary-gifts");
+  if (/\b(personali[sz]ed|customi[sz]ed|custom name)\b/.test(title)) suggestions.push("personalized-gifts");
+  if (category === "rose_bouquets" && !suggestions.length) suggestions.push("rose-bouquets");
+  return [...new Set(suggestions)];
+}
+
 function makePublishForm(rec, api, refresh) {
-  const details = make("details", "publish-details"); details.append(make("summary", "primary-button", "Prepare explicit storefront publish"));
+  const details = make("details", "publish-details");
+  details.append(make("summary", "primary-button", "Prepare explicit storefront publish"));
   const form = make("form", "admin-edit-form");
   const slug = `${slugify(rec.title)}-${slugify(rec.cj_product_id).slice(-18)}`.replace(/-+/g, "-").slice(0, 180);
   for (const [name, label, type, initial] of [["slug", "Storefront URL slug", "text", slug], ["price", "Retail price (USD)", "number", rec.suggested_retail_price || ""]]) {
-    const wrap = make("label", "admin-field"); wrap.append(make("span", "", label)); const input = make("input"); input.type = type; input.name = name; input.value = initial;
+    const wrap = make("label", "admin-field");
+    wrap.append(make("span", "", label));
+    const input = make("input"); input.type = type; input.name = name; input.value = initial;
     if (type === "number") { input.min = "0.01"; input.step = "0.01"; }
     wrap.append(input); form.append(wrap);
   }
-  const collections = make("label", "admin-field"); collections.append(make("span", "", "Collections (comma-separated IDs; optional)"));
-  const collectionInput = make("input"); collectionInput.name = "collection_ids"; collectionInput.placeholder = "best-sellers, birthday-gifts"; collections.append(collectionInput); form.append(collections);
+
+  const collectionGroup = make("fieldset", "publish-collection-fieldset");
+  collectionGroup.append(make("legend", "", "Choose the actual COKITOMI storefront collection(s)"));
+  const collectionHelp = make("p", "admin-notice", "A product can appear in multiple collections. Suggested matches are preselected for review. Best Sellers is never selected automatically; use it only when popularity or sales evidence supports the label.");
+  collectionGroup.append(collectionHelp);
+  const suggested = new Set(suggestedStorefrontCollections(rec));
+  const storefrontCollections = [
+    ["best-sellers", "Best Sellers"],
+    ["rose-teddy-bears", "Rose Teddy Bears"],
+    ["rose-bouquets", "Rose Bouquets"],
+    ["giant-teddy-bears", "Giant Teddy Bears"],
+    ["birthday-gifts", "Birthday Gifts"],
+    ["anniversary-gifts", "Anniversary Gifts"],
+    ["luxury-teddy-bears", "Luxury Teddy Bears"],
+    ["personalized-gifts", "Personalized Gifts"],
+  ];
+  for (const [id, label] of storefrontCollections) {
+    const option = make("label", "publish-collection-option");
+    const checkbox = make("input");
+    checkbox.type = "checkbox"; checkbox.name = "collection_ids"; checkbox.value = id; checkbox.checked = suggested.has(id);
+    option.append(checkbox, make("span", "", label));
+    collectionGroup.append(option);
+  }
+  form.append(collectionGroup);
+
   const feedback = make("p", "admin-notice"); feedback.setAttribute("role", "status");
   const publish = make("button", "primary-button", "Publish approved product now"); publish.type = "submit";
-  form.append(publish, feedback); form.addEventListener("submit", async (event) => {
-    event.preventDefault(); publish.disabled = true; feedback.textContent = "Publishing the approved record…";
+  form.append(publish, feedback);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
     const data = new FormData(form);
+    const collectionIds = data.getAll("collection_ids").map((value) => String(value));
+    if (!collectionIds.length) {
+      feedback.textContent = "Choose at least one storefront collection before publishing.";
+      return;
+    }
+    publish.disabled = true; feedback.textContent = "Publishing the approved record…";
     try {
-      await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}/publish`, { method: "POST", body: JSON.stringify({
-        slug: String(data.get("slug")).trim(), price: Number(data.get("price")),
-        collection_ids: String(data.get("collection_ids") || "").split(",").map((part) => part.trim()).filter(Boolean),
-      }) });
-      feedback.textContent = "Published to the active storefront catalogue."; await refresh();
-    } catch (error) { feedback.textContent = error.message; publish.disabled = false; }
+      await api(`/api/admin/recommendations/${encodeURIComponent(rec.id)}/publish`, {
+        method: "POST",
+        body: JSON.stringify({
+          slug: String(data.get("slug")).trim(),
+          price: Number(data.get("price")),
+          collection_ids: collectionIds,
+        }),
+      });
+      feedback.textContent = "Published to the selected COKITOMI storefront collection(s).";
+      await refresh();
+    } catch (error) {
+      feedback.textContent = error.message;
+      publish.disabled = false;
+    }
   });
-  details.append(form); return details;
+  details.append(form);
+  return details;
 }
