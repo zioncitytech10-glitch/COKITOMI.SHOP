@@ -27,7 +27,7 @@ services:
         value: "20"
       - key: CJ_REQUEST_INTERVAL_MS
         value: "1100"
-      - key: DISCOVERY_RETAIL_MULTIPLIER
-        value: "2.5"
+      - key: DISCOVERY_TARGET_MARGIN
+        value: "0.50"
       - key: ESTIMATED_PAYMENT_FEE_RATE
         value: "0.03"
