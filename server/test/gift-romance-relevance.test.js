@@ -4,6 +4,11 @@ import { ProductDiscovery, findTeddyBearCategories, isTeddyBearCandidate, isRose
 
 test("teddy bear category accepts teddy bear toys and rejects unrelated products", () => {
   assert.equal(isTeddyBearCandidate("Giant Teddy Bear Plush Toy"), true);
+  assert.equal(isTeddyBearCandidate(
+    "Giant Teddy Bear Plush Toy Huge Soft Toys Leather Shell",
+    "Toys & Hobbies > Stuffed & Plush Animals",
+    "A soft teddy bear gift. Packaging may include a small bag and a blanket."
+  ), true);
   assert.equal(isTeddyBearCandidate("Cute Plush Bear Doll"), true);
   assert.equal(isTeddyBearCandidate("Stuffed Animal Bear"), true);
   assert.equal(isTeddyBearCandidate("Soft Toy", "Plush Bears"), false);
