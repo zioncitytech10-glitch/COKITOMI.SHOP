@@ -4,23 +4,54 @@ const n = (value) => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
+function verifiedSupplierPrice(value, verified) {
+  const parsed = n(value);
+  return verified === true && parsed !== null && parsed > 0 ? parsed : null;
+}
+
+function verifiedShippingCost(value, verified) {
+  const parsed = n(value);
+  return verified === true && parsed !== null && parsed >= 0 ? parsed : null;
+}
+
 export function scoreCandidate(
   candidate,
-  { retailMultiplier = 2.5, targetMargin = null, paymentFeeRate = 0.03 } = {},
+  { targetMargin = 0.5, paymentFeeRate = 0.03 } = {},
 ) {
-  const productCost = n(candidate.supplierPrice) ?? 0;
-  const shippingCost = n(candidate.shippingCost) ?? 0;
-  const landedCost = productCost + shippingCost;
+  const supplierPrice = verifiedSupplierPrice(
+    candidate.supplierPrice,
+    candidate.supplierPriceVerified,
+  );
+  const shippingCost = verifiedShippingCost(
+    candidate.shippingCost,
+    candidate.shippingCostVerified,
+  );
+  const landedCost = supplierPrice === null || shippingCost === null
+    ? null
+    : supplierPrice + shippingCost;
 
-  // Price to the configured target margin after the estimated payment fee.
-  // Fall back to the legacy multiplier when no target margin is supplied.
-  const effectiveMultiplier = Number.isFinite(targetMargin)
-    ? 1 / Math.max(0.01, 1 - targetMargin - paymentFeeRate)
-    : retailMultiplier;
-  const suggestedRetail = Number((landedCost * effectiveMultiplier).toFixed(2));
-  const estimatedPaymentFee = Number((suggestedRetail * paymentFeeRate).toFixed(2));
-  const estimatedProfit = Number((suggestedRetail - landedCost - estimatedPaymentFee).toFixed(2));
-  const margin = suggestedRetail > 0 ? estimatedProfit / suggestedRetail : 0;
+  // Never derive a retail price, profit, or margin from missing or unverified
+  // supplier costs. The target is margin after the estimated payment fee.
+  const denominator = 1 - targetMargin - paymentFeeRate;
+  const costsVerified = landedCost !== null;
+  const pricingConfigurationValid = Number.isFinite(targetMargin)
+    && Number.isFinite(paymentFeeRate)
+    && targetMargin >= 0
+    && paymentFeeRate >= 0
+    && denominator > 0;
+
+  const suggestedRetail = costsVerified && pricingConfigurationValid
+    ? Number((landedCost / denominator).toFixed(2))
+    : null;
+  const estimatedPaymentFee = suggestedRetail === null
+    ? null
+    : Number((suggestedRetail * paymentFeeRate).toFixed(2));
+  const estimatedProfit = suggestedRetail === null
+    ? null
+    : Number((suggestedRetail - landedCost - (suggestedRetail * paymentFeeRate)).toFixed(2));
+  const margin = suggestedRetail === null
+    ? null
+    : (suggestedRetail - landedCost - (suggestedRetail * paymentFeeRate)) / suggestedRetail;
 
   const inventory = Math.max(0, n(candidate.inventory) ?? 0);
   const rating = Math.min(5, Math.max(0, n(candidate.rating) ?? 0));
@@ -33,18 +64,19 @@ export function scoreCandidate(
     inventory: inventory > 100 ? 15 : inventory > 20 ? 10 : inventory > 0 ? 4 : 0,
     reviews: reviewCount ? Math.min(15, Math.round(rating * 2 + Math.log10(reviewCount + 1) * 2)) : 0,
     delivery: deliveryDays == null ? 0 : deliveryDays <= 7 ? 12 : deliveryDays <= 14 ? 8 : deliveryDays <= 25 ? 4 : 0,
-    margin: margin >= 0.5 ? 13 : margin >= 0.35 ? 10 : margin >= 0.2 ? 6 : margin > 0 ? 2 : 0,
+    margin: margin !== null && margin >= 0.5 ? 13 : margin !== null && margin >= 0.35 ? 10 : margin !== null && margin >= 0.2 ? 6 : margin !== null && margin > 0 ? 2 : 0,
   };
 
   return {
     score: Object.values(breakdown).reduce((total, points) => total + points, 0),
     breakdown,
-    supplierPrice: productCost,
+    supplierPrice,
     shippingCost,
-    landedCost: Number(landedCost.toFixed(2)),
+    costsVerified,
+    landedCost: landedCost === null ? null : Number(landedCost.toFixed(2)),
     suggestedRetail,
     estimatedPaymentFee,
     estimatedProfit,
-    estimatedMargin: Number(margin.toFixed(4)),
+    estimatedMargin: margin === null ? null : Number(margin.toFixed(4)),
   };
 }
