@@ -14,6 +14,12 @@ window.COKITOMI_COLLECTIONS = [
     image: "https://images.unsplash.com/photo-1708360459857-9563d80d3acb?auto=format&fit=crop&w=900&q=85"
   },
   {
+    id: "rose-bouquets",
+    name: "Rose Bouquets",
+    description: "Thoughtful rose bouquets and preserved flower gifts for meaningful moments.",
+    image: "https://images.unsplash.com/photo-1490750967868-88aa4486c946?auto=format&fit=crop&w=900&q=85"
+  },
+  {
     id: "giant-teddy-bears",
     name: "Giant Teddy Bears",
     description: "Explore this collection as larger demo teddy listings are added.",
