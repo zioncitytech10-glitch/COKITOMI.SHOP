@@ -259,12 +259,11 @@ const server = createServer(async (req, res) => {
         const body = await readJson(req);
         const keywords = body.keywords === undefined ? undefined : body.keywords;
         const category = body.category === undefined ? "teddy_bears" : body.category;
-        const season = body.season === undefined ? "year_round" : body.season;
+        // Supplier discovery is category-driven only. Seasonal merchandising is
+        // assigned later and must never gate or alter CJ product searches.
+        const season = "year_round";
         if (!["teddy_bears", "rose_bouquets", "romantic_gifts"].includes(category)) {
           return send(res, 400, { error: "Invalid research category" });
-        }
-        if (!["christmas_2026", "new_year_2027", "valentines_2027", "year_round"].includes(season)) {
-          return send(res, 400, { error: "Invalid seasonal collection" });
         }
 
         if (
