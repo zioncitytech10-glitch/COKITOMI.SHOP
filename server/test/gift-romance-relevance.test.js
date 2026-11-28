@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { findTeddyBearCategories, isTeddyBearCandidate, isRoseBouquetCandidate, isRomanticGiftCandidate } from "../src/discovery.js";
+import { ProductDiscovery, findTeddyBearCategories, isTeddyBearCandidate, isRoseBouquetCandidate, isRomanticGiftCandidate } from "../src/discovery.js";
 
 test("teddy bear category accepts teddy bear toys and rejects unrelated products", () => {
   assert.equal(isTeddyBearCandidate("Giant Teddy Bear Plush Toy"), true);
@@ -74,4 +74,32 @@ test("CJ category discovery selects plush and stuffed-toy categories but exclude
   const matches = findTeddyBearCategories(response);
   assert.deepEqual(matches.map((item) => item.id), ["plush-1", "dolls-2"]);
   assert.match(matches[0].path, /Toys, Kids & Baby > Dolls & Stuffed Toys > Plush & Stuffed Animals/);
+});
+
+
+test("teddy research uses the verified local CJ category without calling rate-limited category discovery", async () => {
+  const calls = [];
+  const cj = {
+    async call(path, options = {}) {
+      calls.push({ path, options });
+      if (path === "/product/getCategory") {
+        throw Object.assign(new Error("rate limited"), { cjCode: 1600200, rateLimited: true });
+      }
+      if (path === "/product/listV2") return { data: [] };
+      throw new Error("Unexpected CJ endpoint: " + path);
+    },
+  };
+  const discovery = new ProductDiscovery({
+    cj,
+    config: { maxCandidates: 20 },
+    supabase: { async saveRecommendations() {} },
+  });
+
+  const result = await discovery.research({ category: "teddy_bears", season: "year_round" });
+  assert.equal(calls.some((call) => call.path === "/product/getCategory"), false);
+  assert.equal(result.diagnostics.categoryDiscovery.source, "verified_local_category");
+  assert.equal(result.diagnostics.searchesAttempted, 9);
+  assert.equal(result.diagnostics.searchesSucceeded, 9);
+  assert.equal(result.diagnostics.searchesFailed, 0);
+  assert.equal(result.diagnostics.categoryDiscovery.matchedCategories[0].id, "DD918287-C279-466A-B9C6-56079DE4B37A");
 });
