@@ -188,6 +188,7 @@ export class ProductDiscovery {
       productsFilteredAsIrrelevant: 0,
       productChecks: [],
       categoryDiscovery: { attempted: false, succeeded: false, matchedCategories: [], categorySearches: 0 },
+      rateLimitStoppedSearch: false,
       failures: [],
     };
     const recordFailure = (phase, error) => {
@@ -224,8 +225,13 @@ export class ProductDiscovery {
           } catch (error) {
             diagnostics.searchesFailed++;
             recordFailure("cj_category_search", error);
+            if (error?.rateLimited || error?.cjCode === 1600200) {
+              diagnostics.rateLimitStoppedSearch = true;
+              break;
+            }
           }
         }
+        if (diagnostics.rateLimitStoppedSearch) break;
       }
     } else {
       for (const keyword of selectedKeywords.slice(0, 8)) {
