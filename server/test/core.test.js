@@ -157,64 +157,49 @@ test("CJ rate limiter spaces every request and serializes concurrent callers", a
   for (let index = 1; index < starts.length; index++) assert.ok(starts[index].at - starts[index - 1].at >= 1000);
 });
 
-test("CJ HTTP 429 honors Retry-After and succeeds on a bounded retry", async () => {
+test("CJ HTTP 429 stops immediately and applies a shared cooldown", async () => {
   const clock = fakeClock();
-  const requestStarts = [];
   let productCalls = 0;
   const fakeFetch = async (url) => {
-    requestStarts.push({ url, at: clock.now() });
     if (url.endsWith("getAccessToken")) return Response.json({ result: true, data: { accessToken: "test-access", refreshToken: "test-refresh", accessTokenExpiryDate: "2099-01-01T00:00:00Z" } });
     productCalls++;
-    if (productCalls === 1) return Response.json({ code: 1600200, result: false, message: "private rate limit response" }, { status: 429, headers: { "Retry-After": "3" } });
-    return Response.json({ result: true, data: ["ok"] });
+    return Response.json({ code: 1600200, result: false, message: "private rate limit response" }, { status: 429, headers: { "Retry-After": "3" } });
   };
-  const cj = new CjClient({ apiKey: "test-key", baseUrl: "https://cj.example/api", minIntervalMs: 1000, fetchImpl: fakeFetch, nowImpl: clock.now, sleepImpl: clock.sleep });
-  const result = await cj.call("/product/listV2");
-  assert.deepEqual(result.data, ["ok"]);
-  assert.equal(productCalls, 2);
-  const productStarts = requestStarts.filter(({ url }) => url.endsWith("product/listV2"));
-  assert.ok(productStarts[1].at - productStarts[0].at >= 3000);
-  assert.ok(clock.sleeps.includes(3000));
+  const cj = new CjClient({ apiKey: "test-key", baseUrl: "https://cj.example/api", minIntervalMs: 2000, fetchImpl: fakeFetch, nowImpl: clock.now, sleepImpl: clock.sleep });
+  await assert.rejects(cj.call("/product/listV2"), (error) => error.rateLimited === true);
+  assert.equal(productCalls, 1);
+  assert.ok(cj.cooldownUntil >= clock.now() + 3000);
 });
 
-test("CJ error 1600200 retries, permanent auth/parameter errors do not", async () => {
+test("CJ code 1600200 is not retried automatically; auth and parameter errors also stop", async () => {
   for (const code of [1600200, 1600005, 1600300]) {
     const clock = fakeClock();
     let calls = 0;
     const fakeFetch = async (url) => {
       if (url.endsWith("getAccessToken")) return Response.json({ result: true, data: { accessToken: "test-access", refreshToken: "test-refresh", accessTokenExpiryDate: "2099-01-01T00:00:00Z" } });
       calls++;
-      if (calls === 1 && code === 1600200) return Response.json({ code, result: false, message: "private rate-limit response" });
-      if (code !== 1600200) return Response.json({ code, result: false, message: "private permanent error" });
-      return Response.json({ result: true, data: [] });
+      return Response.json({ code, result: false, message: "private provider response" }, { status: code === 1600200 ? 429 : 200 });
     };
-    const cj = new CjClient({ apiKey: "test-key", baseUrl: "https://cj.example/api", minIntervalMs: 1000, fetchImpl: fakeFetch, nowImpl: clock.now, sleepImpl: clock.sleep });
-    if (code === 1600200) {
-      await cj.call("/product/listV2");
-      assert.equal(calls, 2);
-    } else {
-      await assert.rejects(cj.call("/product/listV2"));
-      assert.equal(calls, 1);
-    }
+    const cj = new CjClient({ apiKey: "test-key", baseUrl: "https://cj.example/api", minIntervalMs: 2000, fetchImpl: fakeFetch, nowImpl: clock.now, sleepImpl: clock.sleep });
+    await assert.rejects(cj.call("/product/listV2"));
+    assert.equal(calls, 1);
   }
 });
 
-test("CJ rate-limit retries are capped at three retries after the initial attempt", async () => {
+test("CJ rate-limit cooldown prevents a second immediate request", async () => {
   const clock = fakeClock();
-  let authenticationCalls = 0;
-  let productCalls = 0;
+  let calls = 0;
   const fakeFetch = async (url) => {
-    if (url.endsWith("getAccessToken")) {
-      authenticationCalls++;
-      return Response.json({ result: true, data: { accessToken: "test-access", refreshToken: "test-refresh", accessTokenExpiryDate: "2099-01-01T00:00:00Z" } });
-    }
-    productCalls++;
-    return Response.json({ code: 1600200, result: false, message: "private rate-limit response" }, { status: 429 });
+    if (url.endsWith("getAccessToken")) return Response.json({ result: true, data: { accessToken: "test-access", refreshToken: "test-refresh", accessTokenExpiryDate: "2099-01-01T00:00:00Z" } });
+    calls++;
+    if (calls === 1) return Response.json({ code: 1600200, result: false }, { status: 429 });
+    return Response.json({ result: true, data: [] });
   };
-  const cj = new CjClient({ apiKey: "test-key", baseUrl: "https://cj.example/api", minIntervalMs: 1000, fetchImpl: fakeFetch, nowImpl: clock.now, sleepImpl: clock.sleep });
+  const cj = new CjClient({ apiKey: "test-key", baseUrl: "https://cj.example/api", minIntervalMs: 2000, fetchImpl: fakeFetch, nowImpl: clock.now, sleepImpl: clock.sleep });
   await assert.rejects(cj.call("/product/listV2"));
-  assert.equal(authenticationCalls, 1);
-  assert.equal(productCalls, 4);
+  await cj.call("/product/listV2");
+  assert.equal(calls, 2);
+  assert.ok(clock.sleeps.some((value) => value >= 60_000));
 });
 
 test("CJ connectivity probes coalesce and cache results to avoid repeat requests", async () => {
