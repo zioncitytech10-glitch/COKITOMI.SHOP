@@ -95,7 +95,7 @@ export const isTeddyBearCandidate = (title, categoryText = "", description = "")
   // Apply exclusions to the product title only. Supplier descriptions often
   // mention unrelated words (for example gift bags or blankets) as packaging,
   // comparisons, or generic use cases; those must not disqualify a real teddy.
-  if (excluded.test(name)) return false;
+  if (excluded.test(name) || /\b(leather shell|shell leather|simulation|wind chime|crib bell|decoration bell)\b/i.test(name)) return false;
   const hasBear = /\b(teddy|bear)\b/i.test(name);
   const toyEvidence = /\b(plush|stuffed|soft\s*toy|soft\s*stuffed|toy|teddy\s*bear|stuffed\s*animals?)\b/i.test(name + " " + category);
   const descriptionEvidence = /\b(plush|stuffed\s*animals?|soft\s*toy|teddy\s*bear)\b/i.test(details);
@@ -416,7 +416,21 @@ export class ProductDiscovery {
         options: first(entry.variantKey, entry.variantProperty, entry.property) || null,
       };
     })));
-    const variant = variants.find((entry) => entry && knownNumber(entry.variantInventory, entry.inventory, entry.stock) > 0) || variants.find((entry) => entry && typeof entry === "object") || {};
+    // Choose a priced, in-stock variant before falling back to any returned variant.
+    const orderedVariants = [...variants].filter((entry) => entry && typeof entry === "object").sort((a, b) => {
+      const aStock = knownNumber(a.variantInventory, a.inventory, a.stock);
+      const bStock = knownNumber(b.variantInventory, b.inventory, b.stock);
+      const aPrice = knownNumber(a.variantSellPrice, a.variantPrice, a.sellPrice);
+      const bPrice = knownNumber(b.variantSellPrice, b.variantPrice, b.sellPrice);
+      const aAvailable = aStock !== null && aStock > 0 ? 1 : 0;
+      const bAvailable = bStock !== null && bStock > 0 ? 1 : 0;
+      if (aAvailable !== bAvailable) return bAvailable - aAvailable;
+      if ((aPrice !== null) !== (bPrice !== null)) return aPrice === null ? 1 : -1;
+      return (aPrice ?? Number.MAX_SAFE_INTEGER) - (bPrice ?? Number.MAX_SAFE_INTEGER);
+    });
+    const variant = orderedVariants.find((entry) => knownNumber(entry.variantInventory, entry.inventory, entry.stock) > 0)
+      || orderedVariants.find((entry) => knownNumber(entry.variantSellPrice, entry.variantPrice, entry.sellPrice) !== null)
+      || orderedVariants[0] || {};
     const vid = variantId(variant);
     const selected = variantRecords.find((entry) => entry.id === vid) || variantRecords[0] || null;
     const stock = selected?.stock ?? null;
@@ -449,13 +463,14 @@ export class ProductDiscovery {
         shipping = sorted[0] || null;
       }
     }
-    const rawSupplierPrice = knownNumber(variant.variantSellPrice, variant.variantPrice, variant.sellPrice, detail.sellPrice, detail.productSellPrice, summary.sellPrice, summary.nowPrice);
-    const supplierPrice = rawSupplierPrice ?? 0;
+    const discoveredSupplierPrice = knownNumber(variant.variantSellPrice, variant.variantPrice, variant.sellPrice, detail.sellPrice, detail.productSellPrice, summary.sellPrice, summary.nowPrice);
+    const rawSupplierPrice = discoveredSupplierPrice !== null && discoveredSupplierPrice > 0 ? discoveredSupplierPrice : null;
+    const supplierPrice = rawSupplierPrice;
     const info = {
       supplierPrice,
-      shippingCost: shipping?.cost ?? 0,
-      inventory: num(stock) || 0,
-      usInventory: num(usStock) || 0,
+      shippingCost: shipping?.cost ?? null,
+      inventory: stock,
+      usInventory: usStock,
       usShippingAvailable: Boolean(shipping),
       deliveryDays: shipping?.days ?? null,
       rating,
@@ -464,6 +479,21 @@ export class ProductDiscovery {
       newArrival: summary._productFlag === 1,
     };
     const scored = await withStage("pricing_scoring", async () => scoreCandidate(info, this.config));
+    const qualityReasons = [];
+    if (rawSupplierPrice === null) qualityReasons.push("Supplier price is missing or unverified");
+    if (!shipping) qualityReasons.push("Shipping quote is missing or unverified");
+    if (stock === null || stock <= 0) qualityReasons.push("Selected variant has no verified available stock");
+    if (shipping?.days == null) qualityReasons.push("Delivery estimate is unavailable");
+    if (reviewCount === 0) qualityReasons.push("No supplier review evidence available");
+    if (usStock === null || usStock <= 0) qualityReasons.push("No verified US warehouse stock");
+    if (rawSupplierPrice !== null && shipping && shipping.cost > rawSupplierPrice * 1.5) {
+      qualityReasons.push("Shipping cost is more than 1.5 times the item price");
+    }
+    const strongCandidate = rawSupplierPrice !== null && shipping !== null
+      && stock !== null && stock > 0 && shipping.days !== null
+      && shipping.days <= 25 && shipping.cost <= rawSupplierPrice * 1.5
+      && scored.score >= 45;
+    const recommendationQuality = strongCandidate ? "strong_candidate" : "needs_review";
     const title = String(titleValue);
     return {
       cj_product_id: pid,
@@ -479,6 +509,7 @@ export class ProductDiscovery {
       supplier_data: {
         supplier: "CJdropshipping", country: sourceCountry, warehouse_us_inventory: info.usInventory,
         inventory_verified: selected?.stock_verified === true, price_verified: rawSupplierPrice !== null,
+        shipping_verified: shipping !== null, delivery_verified: shipping?.days != null,
       },
       supplier_price: scored.supplierPrice,
       shipping_cost: shipping?.cost ?? null,
@@ -494,7 +525,12 @@ export class ProductDiscovery {
       estimated_margin: scored.estimatedMargin,
       commercial_score: scored.score,
       score_breakdown: scored.breakdown,
-      research_signals: { searched_keyword: summary._searchedKeyword, product_category: category, seasonal_collection: season, trending: info.trending, new_arrival: info.newArrival, shipping_quote_available: Boolean(shipping) },
+      research_signals: {
+        searched_keyword: summary._searchedKeyword, product_category: category, seasonal_collection: season,
+        trending: info.trending, new_arrival: info.newArrival, shipping_quote_available: Boolean(shipping),
+        recommendation_quality: recommendationQuality, quality_reasons: qualityReasons,
+        verified_sales_data: false, popularity_evidence: reviewCount > 0 || info.trending,
+      },
       status: "pending",
       researched_at: new Date().toISOString(),
     };

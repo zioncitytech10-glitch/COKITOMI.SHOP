@@ -99,7 +99,15 @@ function renderRecommendation(rec, api, refresh) {
   if (rec.image_url) { const image = make("img", "admin-record-image"); image.src = rec.image_url; image.alt = ""; image.loading = "lazy"; head.append(image); }
   const summary = make("div", "admin-record-summary");
   summary.append(make("h3", "", rec.title), make("p", "", `CJ product ID ${value(rec.cj_product_id)} · Status: ${rec.status} · Commercial score ${value(rec.commercial_score)}/100`));
+  const quality = rec.research_signals?.recommendation_quality || "needs_review";
+  const qualityLabel = quality === "strong_candidate" ? "Strong candidate — verify before publishing" : "Needs review — missing or weak evidence";
+  summary.append(make("p", "record-meta", qualityLabel));
   head.append(summary); card.append(head);
+  const qualityReasons = rec.research_signals?.quality_reasons || [];
+  if (qualityReasons.length) card.append(make("p", "record-meta", "Review notes: " + qualityReasons.join(" · ")));
+  if (rec.research_signals?.verified_sales_data !== true) {
+    card.append(make("p", "record-meta", "Sales volume: Not verified by CJ data. Popularity signals are not confirmed sales."));
+  }
   const stats = make("div", "record-metrics");
   for (const detail of [
     `Supplier price: ${rec.supplier_data?.price_verified ? money(rec.supplier_price) : "Missing / unverified"}`, `Shipping to US (researched variant): ${rec.shipping_cost == null ? "Missing / unverified" : money(rec.shipping_cost)}`,
