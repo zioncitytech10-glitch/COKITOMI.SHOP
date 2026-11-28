@@ -7,6 +7,7 @@
 .supplier-toolbar select{flex:1 1 180px;width:100%;min-width:0;min-height:42px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink)}
 .supplier-toolbar .primary-button{flex:1 1 180px;min-width:0;min-height:42px;margin-top:0;white-space:normal}
 .supplier-toolbar select[aria-label="Recommendation status"]{flex:1 1 190px}
+.supplier-toolbar select[aria-label="Filter recommendations by product category"]{flex:1 1 210px}
 @media(max-width:700px){.supplier-toolbar{display:grid;grid-template-columns:minmax(0,1fr)}.supplier-toolbar select,.supplier-toolbar .primary-button{width:100%;min-width:0}}
 
 .supplier-cleanup{display:flex;justify-content:flex-end;margin:8px 0 12px}.supplier-cleanup [hidden]{display:none}.danger-button{background:#fff}
