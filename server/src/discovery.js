@@ -463,7 +463,8 @@ export class ProductDiscovery {
         shipping = sorted[0] || null;
       }
     }
-    const rawSupplierPrice = knownNumber(variant.variantSellPrice, variant.variantPrice, variant.sellPrice, detail.sellPrice, detail.productSellPrice, summary.sellPrice, summary.nowPrice);
+    const discoveredSupplierPrice = knownNumber(variant.variantSellPrice, variant.variantPrice, variant.sellPrice, detail.sellPrice, detail.productSellPrice, summary.sellPrice, summary.nowPrice);
+    const rawSupplierPrice = discoveredSupplierPrice !== null && discoveredSupplierPrice > 0 ? discoveredSupplierPrice : null;
     const supplierPrice = rawSupplierPrice;
     const info = {
       supplierPrice,
