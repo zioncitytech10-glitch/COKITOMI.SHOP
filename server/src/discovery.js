@@ -47,8 +47,9 @@ export function findTeddyBearCategories(categoryResponse) {
       const normalizedPath = [...new Set(nextPath)].join(" > ");
       const text = normalizedPath.toLowerCase();
       const relevant = /plush|stuffed|doll|teddy|soft toy/i.test(text);
+      const toyCategory = /toys?|kids|bab(?:y|ies)|hobbies|dolls?/i.test(text);
       const petCategory = /pet supplies|pet toys|dog toys|cat toys|pet bedding/i.test(text);
-      if (relevant && !petCategory) found.set(String(id), { id: String(id), name: String(ownName), path: normalizedPath });
+      if (relevant && toyCategory && !petCategory) found.set(String(id), { id: String(id), name: String(ownName), path: normalizedPath });
     }
     for (const [key, child] of Object.entries(value)) {
       if (key.toLowerCase().includes("list") || key.toLowerCase() === "children" || Array.isArray(child)) visit(child, nextPath, seen);
@@ -92,14 +93,15 @@ export const isTeddyBearCandidate = (title, categoryText = "", description = "")
   const details = String(description || "").toLowerCase();
   // Exclude non-toy products even when a loose CJ keyword result mentions teddy/bear.
   const excluded = /\b(jacket|coat|hoodie|shirt|pants|dress|clothing|blanket|pillow|cushion|bag|keychain|phone\s*case|wall\s*art|poster|print|cup|mug|tumbler|glass|bottle|drinkware|lamp|light|curtain|rug|mat|car\s*seat|costume)\b/i;
-  // Apply exclusions to the product title only. Supplier descriptions often
-  // mention unrelated words (for example gift bags or blankets) as packaging,
-  // comparisons, or generic use cases; those must not disqualify a real teddy.
   if (excluded.test(name)) return false;
+  // Descriptions may mention packaging, but a hard product-type contradiction
+  // such as drinkware must not be accepted merely because the title has "teddy".
+  const contradictoryDescription = /\b(coffee\s*(cup|mug)|drinkware|tumbler|glassware|phone\s*case)\b/i;
+  const detailToyEvidence = /\b(plush|stuffed\s*animals?|soft\s*toy|teddy\s*bear)\b/i.test(details);
+  if (contradictoryDescription.test(details) && !detailToyEvidence) return false;
   const hasBear = /\b(teddy|bear)\b/i.test(name);
-  const toyEvidence = /\b(plush|stuffed|soft\s*toy|soft\s*stuffed|toy|teddy\s*bear|stuffed\s*animals?)\b/i.test(name + " " + category);
-  const descriptionEvidence = /\b(plush|stuffed\s*animals?|soft\s*toy|teddy\s*bear)\b/i.test(details);
-  return hasBear && (toyEvidence || descriptionEvidence);
+  const toyEvidence = /\b(plush|stuffed|soft\s*toy|soft\s*stuffed|toy|teddy|stuffed\s*animals?)\b/i.test(name + " " + category);
+  return hasBear && (toyEvidence || detailToyEvidence);
 };
 export const isRoseBouquetCandidate = (title, categoryText = "") => {
   const name = String(title || "").toLowerCase();
