@@ -81,7 +81,9 @@ test("CJ research preserves every returned variant and its available fields usin
     supabase: { async saveRecommendations(rows) { saved = rows; } },
   });
   const result = await discovery.research({ keywords: ["teddy bear"], productFlags: [0] });
-  assert.deepEqual(result, { searched: 1, saved: 1 });
+  assert.equal(result.searched, 1);
+  assert.equal(result.saved, 1);
+  assert.equal(result.diagnostics.recommendationsSaved, 1);
   assert.deepEqual(stockLookups, ["variant-b"]);
   const variants = saved[0].variant_data.variants;
   assert.equal(variants.length, 2);
