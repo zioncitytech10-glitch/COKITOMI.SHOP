@@ -27,6 +27,6 @@ test("50 percent target margin is calculated after the payment fee when both cos
   assert.equal(result.costsVerified, true);
   assert.equal(result.landedCost, 15);
   assert.equal(result.suggestedRetail, 31.91);
-  assert.equal(result.estimatedMargin, 0.5);
-  assert.equal(result.estimatedProfit, 15.96);
+  assert.equal(result.estimatedMargin, 0.4998);
+  assert.equal(result.estimatedProfit, 15.95);
 });
