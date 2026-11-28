@@ -450,10 +450,13 @@ export class ProductDiscovery {
       }
     }
     const rawSupplierPrice = knownNumber(variant.variantSellPrice, variant.variantPrice, variant.sellPrice, detail.sellPrice, detail.productSellPrice, summary.sellPrice, summary.nowPrice);
-    const supplierPrice = rawSupplierPrice ?? 0;
+    const supplierPriceVerified = rawSupplierPrice !== null && rawSupplierPrice > 0;
+    const shippingCostVerified = shipping?.cost !== null && shipping?.cost !== undefined;
     const info = {
-      supplierPrice,
-      shippingCost: shipping?.cost ?? 0,
+      supplierPrice: supplierPriceVerified ? rawSupplierPrice : null,
+      supplierPriceVerified,
+      shippingCost: shippingCostVerified ? shipping.cost : null,
+      shippingCostVerified,
       inventory: num(stock) || 0,
       usInventory: num(usStock) || 0,
       usShippingAvailable: Boolean(shipping),
@@ -478,7 +481,10 @@ export class ProductDiscovery {
       variant_data: { sku: sku || null, name: first(variant.variantName, variant.variantKey), options: variant.variantKey || null, variants: variantRecords },
       supplier_data: {
         supplier: "CJdropshipping", country: sourceCountry, warehouse_us_inventory: info.usInventory,
-        inventory_verified: selected?.stock_verified === true, price_verified: rawSupplierPrice !== null,
+        inventory_verified: selected?.stock_verified === true,
+        price_verified: supplierPriceVerified,
+        shipping_verified: shippingCostVerified,
+        pricing_status: scored.costsVerified ? "estimated_from_verified_costs" : "needs_review_missing_costs",
       },
       supplier_price: scored.supplierPrice,
       shipping_cost: shipping?.cost ?? null,
