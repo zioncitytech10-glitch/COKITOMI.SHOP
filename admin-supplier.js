@@ -18,7 +18,12 @@ export async function renderSupplierView(host, api) {
   const search = make("button", "primary-button", "Research Teddy Bears"); search.type = "button";
   const status = document.createElement("select"); status.setAttribute("aria-label", "Recommendation status");
   for (const [item, label] of [["pending","Pending recommendations"],["approved","Approved recommendations"],["rejected","Rejected recommendations"],["trash","Trash / Restore"]]) { const option = document.createElement("option"); option.value = item; option.textContent = label; status.append(option); }
-  toolbar.append(category, search, status); host.append(toolbar);
+  const recommendationCategory = document.createElement("select");
+  recommendationCategory.setAttribute("aria-label", "Filter recommendations by product category");
+  for (const [item, label] of [["all","All product categories"],["teddy_bears","Teddy Bears"],["rose_bouquets","Roses & Flower Bouquets"],["romantic_gifts","Romantic Gifts & Gift Bundles"]]) {
+    const option = document.createElement("option"); option.value = item; option.textContent = label; recommendationCategory.append(option);
+  }
+  toolbar.append(category, search, status, recommendationCategory); host.append(toolbar);
   category.addEventListener("change", () => { search.textContent = `Research ${category.options[category.selectedIndex].text}`; });
   const notice = make("p", "admin-notice"); notice.setAttribute("role", "status"); host.append(notice);
   const cleanup = make("div", "supplier-cleanup");
@@ -54,13 +59,24 @@ export async function renderSupplierView(host, api) {
     try {
       const result = await api(`/api/admin/recommendations?status=${encodeURIComponent(status.value)}&limit=100`);
       list.replaceChildren();
-      clearRejected.hidden = status.value !== "rejected" || !result.recommendations?.length;
-      emptyTrash.hidden = status.value !== "trash" || !result.recommendations?.length;
-      if (!result.recommendations?.length) list.append(make("p", "muted", status.value === "trash" ? "Trash is empty. Archived records will appear here and can be restored." : `No ${status.value} recommendations.`));
-      for (const recommendation of result.recommendations || []) list.append(renderRecommendation(recommendation, api, refresh));
+      const allRecommendations = result.recommendations || [];
+      const filteredRecommendations = recommendationCategory.value === "all"
+        ? allRecommendations
+        : allRecommendations.filter((item) => item.research_signals?.product_category === recommendationCategory.value);
+      clearRejected.hidden = status.value !== "rejected" || !allRecommendations.length;
+      emptyTrash.hidden = status.value !== "trash" || !allRecommendations.length;
+      if (!filteredRecommendations.length) {
+        const categoryLabel = recommendationCategory.options[recommendationCategory.selectedIndex].text;
+        const emptyMessage = recommendationCategory.value === "all"
+          ? (status.value === "trash" ? "Trash is empty. Archived records will appear here and can be restored." : `No ${status.value} recommendations.`)
+          : `No ${status.value} recommendations in ${categoryLabel}.`;
+        list.append(make("p", "muted", emptyMessage));
+      }
+      for (const recommendation of filteredRecommendations) list.append(renderRecommendation(recommendation, api, refresh));
     } catch (error) { list.replaceChildren(make("p", "admin-notice", error.message)); }
   };
   status.addEventListener("change", refresh);
+  recommendationCategory.addEventListener("change", refresh);
   search.addEventListener("click", async () => {
     search.disabled = true; notice.textContent = "Searching CJ and gathering available product, variant, stock, review and US shipping data…";
     try {
