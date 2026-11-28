@@ -21,12 +21,39 @@ function fakeClock(startAt = 10000) {
   };
 }
 
-test("scoring includes landed cost and yields bounded commercial score", () => {
-  const scored = scoreCandidate({ supplierPrice: 5, shippingCost: 2, inventory: 150, usInventory: 20, rating: 4.8, reviewCount: 30, deliveryDays: 6, trending: true });
+test("pricing reaches the configured post-fee target margin from verified landed cost", () => {
+  const scored = scoreCandidate({
+    supplierPrice: 5,
+    supplierPriceVerified: true,
+    shippingCost: 2,
+    shippingCostVerified: true,
+    inventory: 150,
+    usInventory: 20,
+    rating: 4.8,
+    reviewCount: 30,
+    deliveryDays: 6,
+    trending: true,
+  }, { targetMargin: 0.5, paymentFeeRate: 0.03 });
   assert.equal(scored.landedCost, 7);
-  assert.ok(scored.suggestedRetail > scored.landedCost);
+  assert.equal(scored.suggestedRetail, 14.89);
+  assert.equal(scored.costsVerified, true);
+  assert.ok(Math.abs(scored.estimatedMargin - 0.5) < 0.001);
   assert.ok(scored.score <= 100);
   assert.ok(scored.score > 0);
+});
+
+test("pricing remains unavailable when supplier or shipping costs are unverified", () => {
+  for (const candidate of [
+    { supplierPrice: null, supplierPriceVerified: false, shippingCost: 2, shippingCostVerified: true },
+    { supplierPrice: 5, supplierPriceVerified: true, shippingCost: null, shippingCostVerified: false },
+  ]) {
+    const scored = scoreCandidate(candidate, { targetMargin: 0.5, paymentFeeRate: 0.03 });
+    assert.equal(scored.costsVerified, false);
+    assert.equal(scored.landedCost, null);
+    assert.equal(scored.suggestedRetail, null);
+    assert.equal(scored.estimatedProfit, null);
+    assert.equal(scored.estimatedMargin, null);
+  }
 });
 
 test("CJ research preserves every returned variant and its available fields using mocked responses", async () => {
