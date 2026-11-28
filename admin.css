@@ -14,3 +14,12 @@
 
 /* Restore action and trash view */
 .supplier-toolbar select[aria-label="Recommendation status"]{font-weight:600}
+
+
+/* Storefront collection assignment during explicit CJ publishing. */
+.publish-collection-fieldset{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0;padding:14px;border:1px solid var(--line);border-radius:10px;min-width:0}
+.publish-collection-fieldset legend{padding:0 6px;font-weight:650;color:var(--ink)}
+.publish-collection-fieldset>.admin-notice{grid-column:1/-1;margin:0}
+.publish-collection-option{display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font-size:12px}
+.publish-collection-option input{width:16px;height:16px;accent-color:var(--accent-dark)}
+@media(max-width:700px){.publish-collection-fieldset{grid-template-columns:minmax(0,1fr)}}
