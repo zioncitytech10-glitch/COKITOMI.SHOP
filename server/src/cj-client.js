@@ -1,9 +1,9 @@
 const API_KEY_PATH = "/authentication/getAccessToken";
 const REFRESH_PATH = "/authentication/refreshAccessToken";
 const EXPIRY_SKEW_MS = 5 * 60 * 1000;
-const MAX_RATE_LIMIT_RETRIES = 3;
-const RATE_LIMIT_BACKOFF_BASE_MS = 1000;
-const RATE_LIMIT_BACKOFF_MAX_MS = 8000;
+const MAX_RATE_LIMIT_RETRIES = 0;
+const RATE_LIMIT_BACKOFF_BASE_MS = 60_000;
+const RATE_LIMIT_BACKOFF_MAX_MS = 5 * 60_000;
 const CONNECTIVITY_CACHE_MS = 60 * 1000;
 const expiryTime = (value) => {
   const parsed = Date.parse(value);
@@ -22,11 +22,11 @@ function parseRetryAfter(value, now) {
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export class CjClient {
-  constructor({ apiKey, baseUrl, minIntervalMs = 1100, fetchImpl = fetch, nowImpl = Date.now, sleepImpl = sleep }) {
+  constructor({ apiKey, baseUrl, minIntervalMs = 2000, fetchImpl = fetch, nowImpl = Date.now, sleepImpl = sleep }) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl;
     this.fetchImpl = fetchImpl;
-    this.minIntervalMs = Math.max(1000, Number(minIntervalMs) || 0);
+    this.minIntervalMs = Math.max(2000, Number(minIntervalMs) || 0);
     this.nowImpl = nowImpl;
     this.sleepImpl = sleepImpl;
     this.token = null;

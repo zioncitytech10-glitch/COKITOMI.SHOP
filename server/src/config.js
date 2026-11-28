@@ -43,7 +43,7 @@ export function loadConfig(env = process.env) {
     allowedOrigins: new Set(allowedOrigins),
     port: Number(env.PORT || 10000),
     maxCandidates: Math.min(50, Math.max(1, Number(env.CJ_MAX_CANDIDATES || 20))),
-    requestIntervalMs: Math.max(1000, Number(env.CJ_REQUEST_INTERVAL_MS || 1100)),
+    requestIntervalMs: Math.max(2000, Number(env.CJ_REQUEST_INTERVAL_MS || 2000)),
     retailMultiplier: Math.max(1, Number(env.DISCOVERY_RETAIL_MULTIPLIER || 2.5)),
     targetMargin: Math.min(0.75, Math.max(0, Number(env.DISCOVERY_TARGET_MARGIN || 0.5))),
     paymentFeeRate: Math.min(0.2, Math.max(0, Number(env.ESTIMATED_PAYMENT_FEE_RATE || 0.03))),
