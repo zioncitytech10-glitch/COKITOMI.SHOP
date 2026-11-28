@@ -167,7 +167,7 @@ export class ProductDiscovery {
       ...(productFlag === undefined ? {} : { productFlag }),
       page: 1,
       // Use a larger page for discovery; warehouse and shipping suitability are verified later.
-      size: Math.min(100, Math.max(50, this.config.maxCandidates)),
+      size: this.config.maxSearchResults || 50,
       features: ["enable_category", "enable_description"],
     };
     const response = await this.cj.call("/product/listV2", { query });
@@ -188,9 +188,18 @@ export class ProductDiscovery {
       productsReturned: 0,
       uniqueProducts: 0,
       productsEvaluated: 0,
+      productsPassed: 0,
+      productsRejected: 0,
+      productsSkipped: 0,
+      duplicateSearchResults: 0,
+      missingProductIdentifiers: 0,
+      productDetailRequests: 0,
+      apiFailures: 0,
+      rateLimitDeferrals: 0,
       evaluationFailures: 0,
       recommendationsSaved: 0,
       productsFilteredAsIrrelevant: 0,
+      candidateOutcomes: [],
       productChecks: [],
       categoryDiscovery: { attempted: false, succeeded: false, matchedCategories: [], categorySearches: 0 },
       rateLimitStoppedSearch: false,
@@ -201,6 +210,27 @@ export class ProductDiscovery {
     };
 
     const products = new Map();
+    const recordSearchResult = (product, metadata) => {
+      const rawPid = first(product?.pid, product?.productId, product?.id);
+      const pid = rawPid == null ? "" : String(rawPid).trim();
+      if (!pid) {
+        diagnostics.missingProductIdentifiers++;
+        return;
+      }
+      if (products.has(pid)) {
+        diagnostics.duplicateSearchResults++;
+        return;
+      }
+      products.set(pid, { ...product, ...metadata, _cjPid: pid });
+    };
+    const outcomeFor = (summary, outcome, reason, extra = {}) => ({
+      productId: String(first(summary?._cjPid, summary?.pid, summary?.productId, summary?.id, "")).slice(0, 80) || null,
+      title: String(first(summary?.nameEn, summary?.productNameEn, summary?.productName, summary?.name, "")).slice(0, 300) || null,
+      searchedKeyword: summary?._searchedKeyword || null,
+      outcome,
+      reason,
+      ...extra,
+    });
     if (category === "teddy_bears") {
       // Use the verified CJ category ID locally. Calling /product/getCategory
       // on cold starts caused CJ code 1600200 and blocked research before
@@ -222,11 +252,7 @@ export class ProductDiscovery {
             const results = await this.search({ categoryId: searchQuery.categoryId, keyword: searchQuery.keyword, countryCode: null });
             diagnostics.searchesSucceeded++;
             diagnostics.productsReturned += results.length;
-            for (const product of results) {
-              const rawPid = first(product.pid, product.productId, product.id);
-              const pid = rawPid == null ? "" : String(rawPid).trim();
-              if (pid) products.set(pid, { ...product, _cjPid: pid, _searchedKeyword: searchQuery.label, _categoryPath: categoryInfo.path });
-            }
+            for (const product of results) recordSearchResult(product, { _searchedKeyword: searchQuery.label, _categoryPath: categoryInfo.path });
           } catch (error) {
             diagnostics.searchesFailed++;
             recordFailure("cj_category_search", error);
@@ -246,11 +272,7 @@ export class ProductDiscovery {
             const results = await this.search({ keyword, productFlag: flag });
             diagnostics.searchesSucceeded++;
             diagnostics.productsReturned += results.length;
-            for (const product of results) {
-              const rawPid = first(product.pid, product.productId, product.id);
-              const pid = rawPid == null ? "" : String(rawPid).trim();
-              if (pid) products.set(pid, { ...product, _cjPid: pid, _searchedKeyword: keyword, _productFlag: flag });
-            }
+            for (const product of results) recordSearchResult(product, { _searchedKeyword: keyword, _productFlag: flag });
           } catch (error) {
             diagnostics.searchesFailed++;
             recordFailure("cj_search", error);
@@ -272,37 +294,80 @@ export class ProductDiscovery {
           return 0;
         };
         return relevance(b) - relevance(a);
-      })
-      .slice(0, Math.min(60, this.config.maxCandidates * 3));
+      });
     diagnostics.uniqueProducts = candidates.length;
+    const maxUniqueCandidates = this.config.maxUniqueCandidates || this.config.maxCandidates || 40;
+    const maxProductDetailRequests = this.config.maxProductDetailRequests || maxUniqueCandidates;
+    const candidateSelection = candidates.slice(0, maxUniqueCandidates);
+    const deferredByCandidateLimit = candidates.slice(maxUniqueCandidates);
+    const candidatesToEvaluate = candidateSelection.slice(0, maxProductDetailRequests);
+    const deferredByDetailLimit = candidateSelection.slice(maxProductDetailRequests);
     const recommendations = [];
-    for (const summary of candidates) {
+    const recordOutcome = (outcome) => diagnostics.candidateOutcomes.push(outcome);
+    for (const summary of deferredByCandidateLimit) {
+      diagnostics.productsSkipped++;
+      recordOutcome(outcomeFor(summary, "skipped_configured_limit", "Skipped because the configured maximum unique-candidate limit was reached"));
+    }
+    for (const summary of deferredByDetailLimit) {
+      diagnostics.productsSkipped++;
+      recordOutcome(outcomeFor(summary, "skipped_configured_limit", "Skipped because the configured maximum product-detail request limit was reached"));
+    }
+    for (let index = 0; index < candidatesToEvaluate.length; index++) {
+      const summary = candidatesToEvaluate[index];
+      diagnostics.productDetailRequests++;
       try {
         const recommendation = await this.#evaluate(summary, { isRelevant, category, season });
         if (recommendation?._filtered) {
-          diagnostics.productsFilteredAsIrrelevant++;
-          if (diagnostics.productChecks.length < 30) diagnostics.productChecks.push(recommendation.check);
+          recordOutcome(recommendation.check);
+          if (recommendation.check.outcome === "skipped_missing_information") {
+            diagnostics.productsSkipped++;
+          } else {
+            diagnostics.productsEvaluated++;
+            diagnostics.productsRejected++;
+            diagnostics.productsFilteredAsIrrelevant++;
+          }
         } else if (recommendation) {
           recommendations.push(recommendation);
           diagnostics.productsEvaluated++;
-          if (diagnostics.productChecks.length < 30) diagnostics.productChecks.push({
+          diagnostics.productsPassed++;
+          recordOutcome({
             productId: recommendation.cj_product_id,
             title: recommendation.title,
-            category: category,
-            passed: true,
-            reason: "Passed category relevance filter",
+            searchedKeyword: summary._searchedKeyword || null,
+            outcome: "evaluated_passed",
+            reason: recommendation.supplier_data?.pricing_status === "estimated_from_verified_costs"
+              ? "Passed relevance and has verified supplier and shipping costs"
+              : "Passed relevance; supplier economics still require verification",
           });
         }
       } catch (error) {
-        diagnostics.evaluationFailures++;
+        const isRateLimited = error?.rateLimited || error?.httpStatus === 429 || error?.cjCode === 1600200;
         recordFailure("product_evaluation", error);
-        const lastFailure = diagnostics.failures[diagnostics.failures.length - 1];
-        if (lastFailure && lastFailure.phase === "product_evaluation") {
-          const failedProductId = first(summary._cjPid, summary.pid, summary.productId, summary.id);
-          lastFailure.productId = failedProductId == null ? null : String(failedProductId).slice(0, 80);
+        if (isRateLimited) {
+          diagnostics.rateLimitDeferrals++;
+          recordOutcome(outcomeFor(summary, "deferred_rate_limited", "Deferred because CJ rate limits were reached", { stage: error?.discoveryStage || null }));
+          for (const remaining of candidatesToEvaluate.slice(index + 1)) {
+            diagnostics.rateLimitDeferrals++;
+            recordOutcome(outcomeFor(remaining, "deferred_rate_limited", "Deferred to avoid worsening the active CJ rate limit"));
+          }
+          break;
         }
+        diagnostics.apiFailures++;
+        diagnostics.evaluationFailures++;
+        recordOutcome(outcomeFor(summary, "failed_api_retrieval", "Failed during CJ API retrieval", { stage: error?.discoveryStage || null }));
       }
     }
+    diagnostics.productChecks = diagnostics.candidateOutcomes;
+    const accountedCandidates = diagnostics.productsPassed + diagnostics.productsRejected + diagnostics.productsSkipped
+      + diagnostics.apiFailures + diagnostics.rateLimitDeferrals;
+    diagnostics.reconciliation = {
+      uniqueProducts: diagnostics.uniqueProducts,
+      accountedCandidates,
+      reconciled: diagnostics.uniqueProducts === accountedCandidates,
+      searchResultsAccounted: diagnostics.uniqueProducts + diagnostics.duplicateSearchResults + diagnostics.missingProductIdentifiers,
+      productsReturned: diagnostics.productsReturned,
+      searchResultsReconciled: diagnostics.productsReturned === diagnostics.uniqueProducts + diagnostics.duplicateSearchResults + diagnostics.missingProductIdentifiers,
+    };
     recommendations.sort((a, b) => b.commercial_score - a.commercial_score);
 
     if (recommendations.length) {
@@ -316,7 +381,7 @@ export class ProductDiscovery {
       }
     }
 
-    return { searched: candidates.length, saved: diagnostics.recommendationsSaved, diagnostics };
+    return { searched: diagnostics.uniqueProducts, saved: diagnostics.recommendationsSaved, diagnostics };
   }
 
   async #evaluate(summary, { isRelevant, category, season }) {
@@ -353,6 +418,7 @@ export class ProductDiscovery {
           description: cleanText(descriptionValue),
           searchedKeyword: summary._searchedKeyword || null,
           passed: false,
+          outcome: "skipped_missing_information",
           reason: "CJ product detail did not provide a usable product title",
         },
       };
@@ -368,7 +434,8 @@ export class ProductDiscovery {
           description: cleanText(descriptionValue),
           searchedKeyword: summary._searchedKeyword || null,
           passed: false,
-          reason: "Product title/category/description did not satisfy the teddy-bear relevance rules",
+          outcome: "evaluated_rejected",
+          reason: `Product title/category/description did not satisfy the ${category.replace(/_/g, " ")} relevance rules`,
         },
       };
     }
@@ -381,7 +448,9 @@ export class ProductDiscovery {
       );
       variants = unwrap(variantResponse);
     }
-    const variantRecords = await withStage("variant_processing", () => Promise.all(variants.map(async (entry) => {
+    const totalVariantCount = variants.length;
+    const inspectedVariants = variants.slice(0, this.config.maxVariantsPerProduct || 12);
+    const variantRecords = await withStage("variant_processing", () => Promise.all(inspectedVariants.map(async (entry) => {
       if (!entry || typeof entry !== "object") return {
         id: null, sku: null, name: null, image_url: null, price: null,
         stock: null, stock_verified: false, us_stock: null,
@@ -418,7 +487,7 @@ export class ProductDiscovery {
         options: first(entry.variantKey, entry.variantProperty, entry.property) || null,
       };
     })));
-    const variant = variants.find((entry) => entry && knownNumber(entry.variantInventory, entry.inventory, entry.stock) > 0) || variants.find((entry) => entry && typeof entry === "object") || {};
+    const variant = inspectedVariants.find((entry) => entry && knownNumber(entry.variantInventory, entry.inventory, entry.stock) > 0) || inspectedVariants.find((entry) => entry && typeof entry === "object") || {};
     const vid = variantId(variant);
     const selected = variantRecords.find((entry) => entry.id === vid) || variantRecords[0] || null;
     const stock = selected?.stock ?? null;
@@ -480,7 +549,15 @@ export class ProductDiscovery {
         ...(Array.isArray(detail.productImageSet) ? detail.productImageSet : []),
         ...(Array.isArray(detail.image) ? detail.image : typeof detail.img === "string" ? detail.img.split(",") : []),
       ].map(imageUrl).filter((url) => typeof url === "string" && url.trim()).map((url) => url.trim()))].slice(0, 50),
-      variant_data: { sku: sku || null, name: first(variant.variantName, variant.variantKey), options: variant.variantKey || null, variants: variantRecords },
+      variant_data: {
+        sku: sku || null,
+        name: first(variant.variantName, variant.variantKey),
+        options: variant.variantKey || null,
+        variants: variantRecords,
+        total_variants_returned: totalVariantCount,
+        variants_inspected: variantRecords.length,
+        variants_truncated: totalVariantCount > variantRecords.length,
+      },
       supplier_data: {
         supplier: "CJdropshipping", country: sourceCountry, warehouse_us_inventory: info.usInventory,
         inventory_verified: selected?.stock_verified === true,
@@ -502,7 +579,17 @@ export class ProductDiscovery {
       estimated_margin: scored.estimatedMargin,
       commercial_score: scored.score,
       score_breakdown: scored.breakdown,
-      research_signals: { searched_keyword: summary._searchedKeyword, product_category: category, seasonal_collection: season, trending: info.trending, new_arrival: info.newArrival, shipping_quote_available: Boolean(shipping) },
+      research_signals: {
+        searched_keyword: summary._searchedKeyword,
+        product_category: category,
+        seasonal_collection: season,
+        trending: info.trending,
+        new_arrival: info.newArrival,
+        shipping_quote_available: Boolean(shipping),
+        image_available: Boolean(imageUrl(first(detail.bigImg, detail.bigImage, detail.productImage, detail.productImageUrl, summary.bigImage, summary.productImage, summary.productImageUrl))),
+        image_quality: "unverified",
+        commercial_readiness: scored.costsVerified ? "verified_cost_estimate" : "needs_cost_verification",
+      },
       status: "pending",
       researched_at: new Date().toISOString(),
     };

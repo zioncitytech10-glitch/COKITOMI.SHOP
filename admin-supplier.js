@@ -26,6 +26,9 @@ export async function renderSupplierView(host, api) {
   toolbar.append(category, search, status, recommendationCategory); host.append(toolbar);
   category.addEventListener("change", () => { search.textContent = `Research ${category.options[category.selectedIndex].text}`; });
   const notice = make("p", "admin-notice"); notice.setAttribute("role", "status"); host.append(notice);
+  const outcomeDetails = make("details", "variant-details"); outcomeDetails.hidden = true;
+  outcomeDetails.append(make("summary", "", "Candidate evaluation details"));
+  const outcomeList = make("ul", "record-meta"); outcomeDetails.append(outcomeList); host.append(outcomeDetails);
   const cleanup = make("div", "supplier-cleanup");
   const clearRejected = make("button", "quiet-button danger-button", "Move all rejected, unpublished records to Trash");
   clearRejected.type = "button"; clearRejected.hidden = true;
@@ -78,14 +81,21 @@ export async function renderSupplierView(host, api) {
   status.addEventListener("change", refresh);
   recommendationCategory.addEventListener("change", refresh);
   search.addEventListener("click", async () => {
-    search.disabled = true; notice.textContent = "Searching CJ and gathering available product, variant, stock, review and US shipping data…";
+    search.disabled = true; outcomeDetails.hidden = true; outcomeList.replaceChildren(); notice.textContent = "Searching CJ and gathering available product, variant, stock, review and US shipping data…";
     try {
       const result = await api("/api/admin/cj/research", { method: "POST", body: JSON.stringify({ category: category.value, productFlags: [0, 1] }) });
       status.value = "pending"; const d = result.diagnostics || {};
       const failureSummary = Array.isArray(d.failures) && d.failures.length
         ? " Diagnostics: " + d.failures.map((item) => `${item.phase}: ${item.classification}${item.providerCode ? ` (code ${item.providerCode})` : ""}${item.endpoint ? ` at ${item.endpoint}` : ""}${item.productId ? ` for product ${item.productId}` : ""}${item.requestId ? ` [CJ request ${item.requestId}]` : ""}${item.stage ? ` [stage ${item.stage}]` : ""}${item.errorType ? ` [${item.errorType}]` : ""}${item.referenceHint ? ` [${item.referenceHint}]` : ""}`).join("; ")
         : "";
-      notice.textContent = `Research complete for ${category.options[category.selectedIndex].text}. ${result.saved ?? 0} recommendation record${result.saved === 1 ? "" : "s"} saved. Searches: ${d.searchesSucceeded ?? 0}/${d.searchesAttempted ?? 0} successful; CJ products: ${d.productsReturned ?? 0}; unique: ${d.uniqueProducts ?? 0}; evaluated: ${d.productsEvaluated ?? 0}; evaluation failures: ${d.evaluationFailures ?? 0}.${failureSummary}`;
+      const reconciliation = d.reconciliation?.reconciled === false ? " Candidate accounting requires review." : "";
+      notice.textContent = `Research complete for ${category.options[category.selectedIndex].text}. ${result.saved ?? 0} recommendation record${result.saved === 1 ? "" : "s"} saved. Searches: ${d.searchesSucceeded ?? 0}/${d.searchesAttempted ?? 0} successful; CJ products: ${d.productsReturned ?? 0}; unique: ${d.uniqueProducts ?? 0}; evaluated: ${d.productsEvaluated ?? 0} (${d.productsPassed ?? 0} passed, ${d.productsRejected ?? 0} rejected); skipped: ${d.productsSkipped ?? 0}; duplicates: ${d.duplicateSearchResults ?? 0}; API failures: ${d.apiFailures ?? d.evaluationFailures ?? 0}; rate-limit deferrals: ${d.rateLimitDeferrals ?? 0}.${reconciliation}${failureSummary}`;
+      const outcomes = Array.isArray(d.candidateOutcomes) ? d.candidateOutcomes : [];
+      for (const item of outcomes) {
+        const label = `${String(item.outcome || "unknown").replaceAll("_", " ")}: ${item.title || item.productId || "CJ product"} — ${item.reason || "No reason returned"}`;
+        outcomeList.append(make("li", "", label));
+      }
+      outcomeDetails.hidden = !outcomes.length;
       await refresh();
     } catch (error) { notice.textContent = error.message; }
     finally { search.disabled = false; }
