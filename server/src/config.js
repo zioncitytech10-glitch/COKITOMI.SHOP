@@ -42,7 +42,12 @@ export function loadConfig(env = process.env) {
     diagnosticBearerToken,
     allowedOrigins: new Set(allowedOrigins),
     port: Number(env.PORT || 10000),
-    maxCandidates: Math.min(50, Math.max(1, Number(env.CJ_MAX_CANDIDATES || 20))),
+    // CJ limits are deliberately independent: a broad search result page must
+    // not turn into unbounded detail, stock, and freight requests.
+    maxSearchResults: Math.min(100, Math.max(1, Number(env.CJ_MAX_SEARCH_RESULTS || 50))),
+    maxUniqueCandidates: Math.min(100, Math.max(1, Number(env.CJ_MAX_UNIQUE_CANDIDATES || env.CJ_MAX_CANDIDATES || 40))),
+    maxProductDetailRequests: Math.min(100, Math.max(1, Number(env.CJ_MAX_PRODUCT_DETAIL_REQUESTS || env.CJ_MAX_UNIQUE_CANDIDATES || env.CJ_MAX_CANDIDATES || 40))),
+    maxVariantsPerProduct: Math.min(50, Math.max(1, Number(env.CJ_MAX_VARIANTS_PER_PRODUCT || 12))),
     requestIntervalMs: Math.max(2000, Number(env.CJ_REQUEST_INTERVAL_MS || 2000)),
     targetMargin: Math.min(0.75, Math.max(0, Number(env.DISCOVERY_TARGET_MARGIN || 0.5))),
     paymentFeeRate: Math.min(0.2, Math.max(0, Number(env.ESTIMATED_PAYMENT_FEE_RATE || 0.03))),

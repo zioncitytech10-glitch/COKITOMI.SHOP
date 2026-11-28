@@ -96,6 +96,79 @@ test("CJ research preserves every returned variant and its available fields usin
   assert.equal(variants[1].us_stock_verified, true);
   assert.equal(saved[0].image_url, "https://images.example/bear.jpg");
   assert.deepEqual(saved[0].gallery, ["https://images.example/bear.jpg", "https://images.example/gallery.jpg"]);
+  assert.equal(saved[0].variant_data.total_variants_returned, 2);
+  assert.equal(saved[0].variant_data.variants_inspected, 2);
+  assert.equal(saved[0].variant_data.variants_truncated, false);
+});
+
+test("CJ discovery reconciles every unique candidate without hiding rejected, skipped, or failed products", async () => {
+  let saved = [];
+  const cj = { async call(path, options = {}) {
+    if (path === "/product/listV2") return { data: [
+      { pid: "pass", productNameEn: "Classic Teddy Bear Plush" },
+      { pid: "reject", productNameEn: "Teddy Bear Coffee Mug" },
+      { pid: "missing" },
+      { pid: "failure", productNameEn: "Teddy Bear Gift" },
+    ] };
+    if (path === "/product/productDetail/query") {
+      const id = options.body.id;
+      if (id === "failure") throw new Error("temporary CJ detail failure");
+      if (id === "missing") return { data: { variants: [] } };
+      if (id === "reject") return { data: { productNameEn: "Teddy Bear Coffee Mug", description: "Ceramic drinkware", variants: [] } };
+      return { data: { productNameEn: "Classic Teddy Bear Plush", bigImage: "https://images.example/pass.jpg", variants: [{ vid: "pass-v", variantSku: "PASS-SKU", variantSellPrice: 8, variantInventory: 3 }] } };
+    }
+    if (path === "/product/productComments") return { data: [], total: 0 };
+    if (path === "/logistic/freightCalculateTip") return { data: [{ logisticName: "Test freight", totalPostageFee: 2, logisticAging: "7-10" }] };
+    throw new Error(`Unexpected mocked CJ path ${path}`);
+  } };
+  const discovery = new ProductDiscovery({
+    cj,
+    config: { maxSearchResults: 20, maxUniqueCandidates: 10, maxProductDetailRequests: 10, maxVariantsPerProduct: 4, targetMargin: 0.5, paymentFeeRate: 0.03 },
+    supabase: { async saveRecommendations(rows) { saved = rows; } },
+  });
+  const result = await discovery.research({ productFlags: [0] });
+  const d = result.diagnostics;
+  assert.equal(d.productsReturned, 36, "nine teddy searches each return four mocked rows");
+  assert.equal(d.uniqueProducts, 4);
+  assert.equal(d.duplicateSearchResults, 32);
+  assert.equal(d.productsEvaluated, 2);
+  assert.equal(d.productsPassed, 1);
+  assert.equal(d.productsRejected, 1);
+  assert.equal(d.productsSkipped, 1);
+  assert.equal(d.apiFailures, 1);
+  assert.equal(d.reconciliation.reconciled, true);
+  assert.equal(d.reconciliation.searchResultsReconciled, true);
+  assert.deepEqual(d.candidateOutcomes.map((item) => item.outcome).sort(), ["evaluated_passed", "evaluated_rejected", "failed_api_retrieval", "skipped_missing_information"].sort());
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].supplier_data.pricing_status, "estimated_from_verified_costs");
+});
+
+test("CJ discovery defers remaining candidates after a rate limit instead of continuing requests", async () => {
+  let detailCalls = 0;
+  const cj = { async call(path, options = {}) {
+    if (path === "/product/listV2") return { data: [
+      { pid: "one", productNameEn: "Teddy Bear One" },
+      { pid: "two", productNameEn: "Teddy Bear Two" },
+      { pid: "three", productNameEn: "Teddy Bear Three" },
+    ] };
+    if (path === "/product/productDetail/query") {
+      detailCalls++;
+      throw Object.assign(new Error("rate limited"), { rateLimited: true, cjCode: 1600200, httpStatus: 429 });
+    }
+    throw new Error(`Unexpected mocked CJ path ${path} ${JSON.stringify(options)}`);
+  } };
+  const discovery = new ProductDiscovery({
+    cj,
+    config: { maxSearchResults: 20, maxUniqueCandidates: 10, maxProductDetailRequests: 10, maxVariantsPerProduct: 4 },
+    supabase: { async saveRecommendations() { throw new Error("no recommendation should be saved"); } },
+  });
+  const result = await discovery.research({ productFlags: [0] });
+  assert.equal(detailCalls, 1);
+  assert.equal(result.diagnostics.productsEvaluated, 0);
+  assert.equal(result.diagnostics.apiFailures, 0);
+  assert.equal(result.diagnostics.rateLimitDeferrals, 3);
+  assert.equal(result.diagnostics.reconciliation.reconciled, true);
+  assert.ok(result.diagnostics.candidateOutcomes.every((item) => item.outcome === "deferred_rate_limited"));
 });
 
 test("product management validates only editable catalogue fields and explicit publishing input", () => {
@@ -538,9 +611,17 @@ test("config accepts Supabase Auth UUIDs and normalizes GitHub Pages origin", ()
     ADMIN_USER_IDS: "00000000-0000-4000-8000-000000000001",
     COKITOMI_ALLOWED_ORIGINS: "https://zioncitytech10-glitch.github.io/",
     DIAGNOSTIC_BEARER_TOKEN: "test_only_diagnostic_token_0123456789",
+    CJ_MAX_SEARCH_RESULTS: "75",
+    CJ_MAX_UNIQUE_CANDIDATES: "35",
+    CJ_MAX_PRODUCT_DETAIL_REQUESTS: "25",
+    CJ_MAX_VARIANTS_PER_PRODUCT: "8",
   });
   assert.equal(config.adminUserIds.has("00000000-0000-4000-8000-000000000001"), true);
   assert.equal(config.allowedOrigins.has("https://zioncitytech10-glitch.github.io"), true);
+  assert.equal(config.maxSearchResults, 75);
+  assert.equal(config.maxUniqueCandidates, 35);
+  assert.equal(config.maxProductDetailRequests, 25);
+  assert.equal(config.maxVariantsPerProduct, 8);
 });
 
 test("connectivity diagnostic reports successful read-only checks without data", async () => {
