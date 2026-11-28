@@ -15,14 +15,10 @@ export async function renderSupplierView(host, api) {
   for (const [key, label] of [["teddy_bears", "Teddy Bears"], ["rose_bouquets", "Roses & Flower Bouquets"], ["romantic_gifts", "Romantic Gifts & Gift Bundles"]]) {
     const option = document.createElement("option"); option.value = key; option.textContent = label; category.append(option);
   }
-  const season = document.createElement("select"); season.setAttribute("aria-label", "Seasonal collection");
-  for (const [key, label] of [["year_round", "Year-round"], ["christmas_2026", "Christmas 2026"], ["new_year_2027", "New Year 2027"], ["valentines_2027", "Valentine's Day 2027"]]) {
-    const option = document.createElement("option"); option.value = key; option.textContent = label; season.append(option);
-  }
   const search = make("button", "primary-button", "Research Teddy Bears"); search.type = "button";
   const status = document.createElement("select"); status.setAttribute("aria-label", "Recommendation status");
   for (const [item, label] of [["pending","Pending recommendations"],["approved","Approved recommendations"],["rejected","Rejected recommendations"],["trash","Trash / Restore"]]) { const option = document.createElement("option"); option.value = item; option.textContent = label; status.append(option); }
-  toolbar.append(category, season, search, status); host.append(toolbar);
+  toolbar.append(category, search, status); host.append(toolbar);
   category.addEventListener("change", () => { search.textContent = `Research ${category.options[category.selectedIndex].text}`; });
   const notice = make("p", "admin-notice"); notice.setAttribute("role", "status"); host.append(notice);
   const cleanup = make("div", "supplier-cleanup");
@@ -68,12 +64,12 @@ export async function renderSupplierView(host, api) {
   search.addEventListener("click", async () => {
     search.disabled = true; notice.textContent = "Searching CJ and gathering available product, variant, stock, review and US shipping data…";
     try {
-      const result = await api("/api/admin/cj/research", { method: "POST", body: JSON.stringify({ category: category.value, season: season.value, productFlags: [0, 1] }) });
+      const result = await api("/api/admin/cj/research", { method: "POST", body: JSON.stringify({ category: category.value, productFlags: [0, 1] }) });
       status.value = "pending"; const d = result.diagnostics || {};
       const failureSummary = Array.isArray(d.failures) && d.failures.length
         ? " Diagnostics: " + d.failures.map((item) => `${item.phase}: ${item.classification}${item.providerCode ? ` (code ${item.providerCode})` : ""}${item.endpoint ? ` at ${item.endpoint}` : ""}${item.productId ? ` for product ${item.productId}` : ""}${item.requestId ? ` [CJ request ${item.requestId}]` : ""}${item.stage ? ` [stage ${item.stage}]` : ""}${item.errorType ? ` [${item.errorType}]` : ""}${item.referenceHint ? ` [${item.referenceHint}]` : ""}`).join("; ")
         : "";
-      notice.textContent = `Research complete for ${category.options[category.selectedIndex].text} · ${season.options[season.selectedIndex].text}. ${result.saved ?? 0} recommendation record${result.saved === 1 ? "" : "s"} saved. Searches: ${d.searchesSucceeded ?? 0}/${d.searchesAttempted ?? 0} successful; CJ products: ${d.productsReturned ?? 0}; unique: ${d.uniqueProducts ?? 0}; evaluated: ${d.productsEvaluated ?? 0}; evaluation failures: ${d.evaluationFailures ?? 0}.${failureSummary}`;
+      notice.textContent = `Research complete for ${category.options[category.selectedIndex].text}. ${result.saved ?? 0} recommendation record${result.saved === 1 ? "" : "s"} saved. Searches: ${d.searchesSucceeded ?? 0}/${d.searchesAttempted ?? 0} successful; CJ products: ${d.productsReturned ?? 0}; unique: ${d.uniqueProducts ?? 0}; evaluated: ${d.productsEvaluated ?? 0}; evaluation failures: ${d.evaluationFailures ?? 0}.${failureSummary}`;
       await refresh();
     } catch (error) { notice.textContent = error.message; }
     finally { search.disabled = false; }
