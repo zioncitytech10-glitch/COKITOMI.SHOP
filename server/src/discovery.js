@@ -6,6 +6,13 @@ const CATEGORY_SEARCHES = {
   romantic_gifts: ["teddy bear rose gift set", "teddy bear and rose bouquet", "couple bracelet set", "personalised romantic gift", "romantic gift box teddy rose", "heart teddy bear gift"],
 };
 const SEASONS = ["christmas_2026", "new_year_2027", "valentines_2027", "year_round"];
+// Verified from CJ category discovery response on 2026-11-28.
+// Avoid repeatedly calling CJ's rate-limited category-tree endpoint.
+const VERIFIED_TEDDY_CATEGORIES = [{
+  id: "DD918287-C279-466A-B9C6-56079DE4B37A",
+  name: "Stuffed & Plush Animals",
+  path: "Toys, Kids & Babies > Toys & Hobbies > Stuffed & Plush Animals",
+}];
 // CJ Product List V2 nests actual products inside data.content[].productList[].
 const unwrap = (r) => {
   const data = r?.data;
@@ -189,43 +196,36 @@ export class ProductDiscovery {
 
     const products = new Map();
     if (category === "teddy_bears") {
-      diagnostics.categoryDiscovery.attempted = true;
-      try {
-        const categoryResponse = this.categoryCache && Date.now() < this.categoryCache.expiresAt
-          ? this.categoryCache.response
-          : await this.cj.call("/product/getCategory");
-        this.categoryCache = { response: categoryResponse, expiresAt: Date.now() + 6 * 60 * 60 * 1000 };
-        const categories = findTeddyBearCategories(categoryResponse);
-        diagnostics.categoryDiscovery.succeeded = true;
-        diagnostics.categoryDiscovery.matchedCategories = categories;
-        if (!categories.length) recordFailure("category_discovery", Object.assign(new Error("No CJ plush, stuffed-toy or doll categories matched the safe category rules"), { protocolFailure: true }));
-        for (const categoryInfo of categories) {
-          // First scan the category, then refine within it using specific teddy-bear terms.
-          const categoryQueries = [
-            { categoryId: categoryInfo.id, label: "CJ category: " + categoryInfo.path },
-            ...selectedKeywords.slice(0, 8).map((keyword) => ({ categoryId: categoryInfo.id, keyword, label: keyword + " in " + categoryInfo.path })),
-          ];
-          for (const searchQuery of categoryQueries) {
-            diagnostics.searchesAttempted++;
-            diagnostics.categoryDiscovery.categorySearches++;
-            try {
-              const results = await this.search({ categoryId: searchQuery.categoryId, keyword: searchQuery.keyword, countryCode: null });
-              diagnostics.searchesSucceeded++;
-              diagnostics.productsReturned += results.length;
-              for (const product of results) {
-                const rawPid = first(product.pid, product.productId, product.id);
-                const pid = rawPid == null ? "" : String(rawPid).trim();
-                if (pid) products.set(pid, { ...product, _cjPid: pid, _searchedKeyword: searchQuery.label, _categoryPath: categoryInfo.path });
-              }
-            } catch (error) {
-              diagnostics.searchesFailed++;
-              recordFailure("cj_category_search", error);
+      // Use the verified CJ category ID locally. Calling /product/getCategory
+      // on cold starts caused CJ code 1600200 and blocked research before
+      // any product-list query could run.
+      const categories = VERIFIED_TEDDY_CATEGORIES;
+      diagnostics.categoryDiscovery.attempted = false;
+      diagnostics.categoryDiscovery.succeeded = true;
+      diagnostics.categoryDiscovery.source = "verified_local_category";
+      diagnostics.categoryDiscovery.matchedCategories = categories;
+      for (const categoryInfo of categories) {
+        const categoryQueries = [
+          { categoryId: categoryInfo.id, label: "CJ category: " + categoryInfo.path },
+          ...selectedKeywords.slice(0, 8).map((keyword) => ({ categoryId: categoryInfo.id, keyword, label: keyword + " in " + categoryInfo.path })),
+        ];
+        for (const searchQuery of categoryQueries) {
+          diagnostics.searchesAttempted++;
+          diagnostics.categoryDiscovery.categorySearches++;
+          try {
+            const results = await this.search({ categoryId: searchQuery.categoryId, keyword: searchQuery.keyword, countryCode: null });
+            diagnostics.searchesSucceeded++;
+            diagnostics.productsReturned += results.length;
+            for (const product of results) {
+              const rawPid = first(product.pid, product.productId, product.id);
+              const pid = rawPid == null ? "" : String(rawPid).trim();
+              if (pid) products.set(pid, { ...product, _cjPid: pid, _searchedKeyword: searchQuery.label, _categoryPath: categoryInfo.path });
             }
+          } catch (error) {
+            diagnostics.searchesFailed++;
+            recordFailure("cj_category_search", error);
           }
         }
-      } catch (error) {
-        diagnostics.searchesFailed++;
-        recordFailure("cj_category_discovery", error);
       }
     } else {
       for (const keyword of selectedKeywords.slice(0, 8)) {
