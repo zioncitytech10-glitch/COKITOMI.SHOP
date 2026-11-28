@@ -135,13 +135,18 @@
   }
 
   function collectionCard(collection) {
-    const count = products.filter(product => product.collections.includes(collection.id)).length;
+    const matching = products.filter(product => product.collections.includes(collection.id));
+    const liveCount = matching.filter(product => product.catalogueSource === "supabase").length;
+    const demoCount = matching.length - liveCount;
+    const countLabel = liveCount
+      ? `${liveCount} live listing${liveCount === 1 ? "" : "s"}${demoCount ? ` · ${demoCount} demo` : ""}`
+      : demoCount ? `${demoCount} demo listing${demoCount === 1 ? "" : "s"}` : "New collection";
     return `<article class="collection-card">
       <a class="collection-image" href="shop.html?collection=${encodeURIComponent(collection.id)}" aria-label="Browse ${collection.name}">
         <img src="${collection.image}" alt="${collection.name}" loading="lazy">
       </a>
       <div class="collection-card-copy">
-        <p class="eyebrow">${count ? `${count} demo ${count === 1 ? "listing" : "listings"}` : "New collection"}</p>
+        <p class="eyebrow">${countLabel}</p>
         <h3><a href="shop.html?collection=${encodeURIComponent(collection.id)}">${collection.name}</a></h3>
         <p>${collection.description}</p>
         <a class="text-link" href="shop.html?collection=${encodeURIComponent(collection.id)}">Explore collection →</a>
@@ -397,6 +402,7 @@
     const matched = applySupabaseProducts(rows);
     if (!matched) return;
     initHome();
+    initCollections();
     window.COKITOMI_REFRESH_SHOP?.();
     initProductPage();
     renderCart();

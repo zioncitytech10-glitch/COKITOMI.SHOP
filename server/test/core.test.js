@@ -77,6 +77,12 @@ test("product management validates only editable catalogue fields and explicit p
     slug: "new-cj-teddy-17", price: 49.99, collectionIds: ["birthday-gifts"],
   });
   assert.throws(() => validatePublishRequest({ slug: "invalid slug", price: 40 }), { status: 400 });
+  assert.throws(() => validatePublishRequest({ slug: "unknown-collection-product", price: 40, collection_ids: ["not-a-storefront-collection"] }), { status: 400 });
+  assert.throws(() => validatePublishRequest({ slug: "no-collection-product", price: 40, collection_ids: [] }), { status: 400 });
+  assert.deepEqual(validatePublishRequest({ slug: "rose-bouquet-gift", price: 55, collection_ids: ["rose-bouquets", "anniversary-gifts"] }), {
+    slug: "rose-bouquet-gift", price: 55, collectionIds: ["rose-bouquets", "anniversary-gifts"],
+  });
+  assert.throws(() => validateProductChanges({ collection_ids: ["not-a-storefront-collection"] }), { status: 400 });
 });
 
 test("CJ requests use one shared token acquisition and never put keys in URL", async () => {
